@@ -1,81 +1,131 @@
-import { handleVerification } from './verify_keys.js';
+import { handleAnthropic } from './anthropic.js';
+import { getConfig } from './config.js';
+import { proxyGemini } from './gemini.js';
 import openai from './openai.mjs';
+import {
+  HttpError, corsHeaders, enforceBodySize, enforceGatewayAuth, jsonError,
+  requestId, withCors,
+} from './security.js';
+import { handleVerification } from './verify_keys.js';
 
-export async function handleRequest(request) {
-
-  const url = new URL(request.url);
-  const pathname = url.pathname;
-  const search = url.search;
-
-  if (pathname === '/' || pathname === '/index.html') {
-    return new Response('Proxy is Running!  More Details: https://github.com/tech-shrimp/gemini-balance-lite', {
-      status: 200,
-      headers: { 'Content-Type': 'text/html' }
-    });
-  }
-
-  if (pathname === '/verify' && request.method === 'POST') {
-    return handleVerification(request);
-  }
-
-  // 处理OpenAI格式请求
-  if (url.pathname.endsWith("/chat/completions") || url.pathname.endsWith("/completions") || url.pathname.endsWith("/embeddings") || url.pathname.endsWith("/models")) {
-    return openai.fetch(request);
-  }
-
-  const targetUrl = `https://generativelanguage.googleapis.com${pathname}${search}`;
+export async function handleRequest(request, env = {}) {
+  const config = getConfig(env);
+  const id = requestId(request);
+  const startedAt = Date.now();
+  const route = identifyRoute(request);
+  let response;
 
   try {
-    const headers = new Headers();
-    for (const [key, value] of request.headers.entries()) {
-      if (key.trim().toLowerCase() === 'x-goog-api-key') {
-        const apiKeys = value.split(',').map(k => k.trim()).filter(k => k);
-        if (apiKeys.length > 0) {
-          const selectedKey = apiKeys[Math.floor(Math.random() * apiKeys.length)];
-          console.log(`Gemini Selected API Key: ${selectedKey}`);
-          headers.set('x-goog-api-key', selectedKey);
-        }
-      } else {
-        if (key.trim().toLowerCase()==='content-type')
-        {
-           headers.set(key, value);
-        }
-      }
+    if (request.method === 'OPTIONS') {
+      response = new Response(null, { status: 204, headers: corsHeaders(request, config) });
+      return withCors(response, request, config, id);
     }
 
-    console.log('Request Sending to Gemini')
-    console.log('targetUrl:'+targetUrl)
-    console.log(headers)
+    if (route.kind === 'home') {
+      response = new Response(JSON.stringify({
+        name: 'ggproxy', status: 'ok', protocols: ['gemini', 'openai', 'anthropic'],
+      }), { headers: { 'content-type': 'application/json; charset=utf-8' } });
+      return withCors(response, request, config, id);
+    }
 
-    const response = await fetch(targetUrl, {
-      method: request.method,
-      headers: headers,
-      body: request.body
-    });
+    enforceGatewayAuth(request, config);
+    enforceBodySize(request, config);
 
-    console.log("Call Gemini Success")
-
-    const responseHeaders = new Headers(response.headers);
-
-    console.log('Header from Gemini:')
-    console.log(responseHeaders)
-
-    responseHeaders.delete('transfer-encoding');
-    responseHeaders.delete('connection');
-    responseHeaders.delete('keep-alive');
-    responseHeaders.delete('content-encoding');
-    responseHeaders.set('Referrer-Policy', 'no-referrer');
-
-    return new Response(response.body, {
-      status: response.status,
-      headers: responseHeaders
-    });
-
+    if (route.kind === 'verify') {
+      if (!config.verifyEnabled) throw new HttpError('Key verification is disabled', 404, 'not_found');
+      response = await handleVerification(request, config);
+    } else if (route.protocol === 'gemini') {
+      response = await proxyGemini(rewriteRequestPath(request, route.path), config);
+    } else if (route.protocol === 'openai') {
+      response = await openai.fetch(request, { config, endpoint: route.endpoint, path: route.path });
+    } else if (route.protocol === 'anthropic') {
+      response = await handleAnthropic(request, { config, endpoint: route.endpoint });
+    } else {
+      throw new HttpError('Route not found', 404, 'not_found');
+    }
   } catch (error) {
-   console.error('Failed to fetch:', error);
-   return new Response('Internal Server Error\n' + error?.stack, {
-    status: 500,
-    headers: { 'Content-Type': 'text/plain' }
-   });
+    response = jsonError(error, route.protocol || 'gemini', id);
+  }
+
+  console.log(JSON.stringify({
+    request_id: id,
+    protocol: route.protocol || route.kind,
+    path: new URL(request.url).pathname,
+    method: request.method,
+    status: response.status,
+    duration_ms: Date.now() - startedAt,
+  }));
+  return withCors(response, request, config, id);
 }
-};
+
+export function identifyRoute(request) {
+  const url = new URL(request.url);
+  let path = normalizePath(url.pathname);
+  if (path === '/' || path === '/index.html' || path === '/healthz') return { kind: 'home' };
+  if (path === '/verify') return { kind: 'verify', protocol: 'gemini' };
+
+  let explicitProtocol = '';
+  for (const [prefix, protocol] of [['/gemini', 'gemini'], ['/openai', 'openai'], ['/anthropic', 'anthropic']]) {
+    if (path === prefix || path.startsWith(`${prefix}/`)) {
+      explicitProtocol = protocol;
+      path = path.slice(prefix.length) || '/';
+      break;
+    }
+  }
+
+  const openaiEndpoint = matchOpenAI(path);
+  const anthropicEndpoint = matchAnthropic(path);
+  if (explicitProtocol === 'openai') return { protocol: 'openai', endpoint: openaiEndpoint || 'passthrough', path };
+  if (explicitProtocol === 'anthropic') return { protocol: 'anthropic', endpoint: anthropicEndpoint };
+  if (explicitProtocol === 'gemini') return { protocol: 'gemini', path };
+
+  if (anthropicEndpoint) return { protocol: 'anthropic', endpoint: anthropicEndpoint };
+  if (openaiEndpoint && isOpenAIRoute(path, request)) {
+    return { protocol: 'openai', endpoint: openaiEndpoint, path };
+  }
+  if (path.startsWith('/v1beta/openai/')) {
+    return { protocol: 'openai', endpoint: 'passthrough', path };
+  }
+  if (path.startsWith('/v1/') && request.headers.has('authorization') && !request.headers.has('x-goog-api-key')) {
+    return { protocol: 'openai', endpoint: 'passthrough', path };
+  }
+  if (/^\/(v1|v1beta)(\/|$)/.test(path) || /^\/upload\/(v1|v1beta)(\/|$)/.test(path)) {
+    return { protocol: 'gemini', path };
+  }
+  return { kind: 'not_found' };
+}
+
+function matchOpenAI(path) {
+  const stripped = path.replace(/^\/v1beta\/openai\//, '/').replace(/^\/v1\//, '/');
+  const endpoints = new Map([
+    ['/chat/completions', 'chat/completions'], ['/completions', 'completions'],
+    ['/responses', 'responses'], ['/embeddings', 'embeddings'], ['/models', 'models'],
+  ]);
+  return endpoints.get(stripped) || '';
+}
+
+function matchAnthropic(path) {
+  if (path === '/v1/messages') return 'messages';
+  if (path === '/v1/messages/count_tokens') return 'messages/count_tokens';
+  return '';
+}
+
+function isOpenAIRoute(path, request) {
+  if (path.startsWith('/v1beta/openai/')) return true;
+  if (path === '/v1/models') {
+    if (request.headers.has('x-goog-api-key')) return false;
+    return request.headers.has('authorization');
+  }
+  return true;
+}
+
+function normalizePath(path) {
+  if (path.length > 1 && path.endsWith('/')) return path.slice(0, -1);
+  return path;
+}
+
+function rewriteRequestPath(request, path) {
+  const url = new URL(request.url);
+  url.pathname = path;
+  return new Request(url, request);
+}

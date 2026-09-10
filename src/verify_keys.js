@@ -1,65 +1,48 @@
-async function verifyKey(key, controller) {
-  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
-  const body = {
-    "contents": [{
-      "role": "user",
-      "parts": [{
-        "text": "Hello"
-      }]
-    }]
-  };
+import { fetchWithTimeout, HttpError } from './security.js';
+
+const VERIFY_URL = 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1';
+const MAX_KEYS = 20;
+
+async function verifyKey(key, controller, config) {
   let result;
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-goog-api-key': key,
-      },
-      body: JSON.stringify(body),
-    });
+    const response = await fetchWithTimeout(VERIFY_URL, {
+      method: 'GET', headers: { 'x-goog-api-key': key },
+    }, Math.min(config.upstreamTimeoutMs, 15_000));
     if (response.ok) {
-      await response.text(); // Consume body to release connection
-      result = { key: `${key.slice(0, 7)}......${key.slice(-7)}`, status: 'GOOD' };
+      await response.body?.cancel();
+      result = { key: maskKey(key), status: 'GOOD' };
     } else {
-      const errorData = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
-      result = { key: `${key.slice(0, 7)}......${key.slice(-7)}`, status: 'BAD', error: errorData.error.message };
+      let message = `HTTP ${response.status}`;
+      try { message = (await response.json()).error?.message || message; } catch { /* ignore */ }
+      result = { key: maskKey(key), status: 'BAD', error: message };
     }
-  } catch (e) {
-    result = { key: `${key.slice(0, 7)}......${key.slice(-7)}`, status: 'ERROR', error: e.message };
+  } catch (error) {
+    result = { key: maskKey(key), status: 'ERROR', error: error.message };
   }
-  controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(result) + '\n\n'));
+  controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(result)}\n\n`));
 }
 
-export async function handleVerification(request) {
-  try {
-    const authHeader = request.headers.get('x-goog-api-key');
-    if (!authHeader) {
-      return new Response(JSON.stringify({ error: 'Missing x-goog-api-key header.' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    const keys = authHeader.split(',').map(k => k.trim()).filter(Boolean);
-
-    const stream = new ReadableStream({
-      async start(controller) {
-        const verificationPromises = keys.map(key => verifyKey(key, controller));
-        await Promise.all(verificationPromises);
-        controller.close();
-      }
-    });
-
-    return new Response(stream, {
-      status: 200,
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      }
-    });
-
-  } catch (e) {
-    return new Response(JSON.stringify({ error: 'An unexpected error occurred: ' + e.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+export async function handleVerification(request, config) {
+  if (request.method !== 'POST') throw new HttpError('Method not allowed', 405, 'method_not_allowed');
+  const raw = request.headers.get('x-goog-api-key');
+  if (!raw) throw new HttpError('Missing x-goog-api-key header', 400, 'missing_api_key');
+  const keys = raw.split(',').map((key) => key.trim()).filter(Boolean);
+  if (!keys.length || keys.length > MAX_KEYS) {
+    throw new HttpError(`Provide between 1 and ${MAX_KEYS} keys`, 400, 'invalid_key_count');
   }
+  const stream = new ReadableStream({
+    async start(controller) {
+      await Promise.all(keys.map((key) => verifyKey(key, controller, config)));
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache' },
+  });
+}
+
+function maskKey(key) {
+  if (key.length < 12) return '***';
+  return `${key.slice(0, 4)}...${key.slice(-4)}`;
 }

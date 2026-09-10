@@ -1,5 +1,13 @@
 {
+  "name": "ggproxy",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check src/handle_request.js && node --check src/openai.mjs && node --check src/anthropic.js && node --check src/security.js && node --check src/gemini.js && node --check src/config.js"
+  },
   "devDependencies": {
     "wrangler": "^4.23.0"
-  },"name": "g2g"
+  }
 }

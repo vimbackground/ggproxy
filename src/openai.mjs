@@ -3,46 +3,48 @@
 //MIT License : https://github.com/PublicAffairs/openai-gemini/blob/main/LICENSE
 
 
-import { Buffer } from "node:buffer";
+import {
+  HttpError, copyRequestHeaders, copyResponseHeaders, fetchWithTimeout, readJsonLimited, selectApiKey,
+} from "./security.js";
 
 export default {
-  async fetch (request) {
-    if (request.method === "OPTIONS") {
-      return handleOPTIONS();
-    }
+  async fetch (request, { config, endpoint, path }) {
     const errHandler = (err) => {
-      console.error(err);
-      return new Response(err.message, fixCors({ status: err.status ?? 500 }));
+      throw err;
     };
     try {
-      const auth = request.headers.get("Authorization");
-      let apiKey = auth?.split(" ")[1];
-      if (apiKey && apiKey.includes(',')) {
-        const apiKeys = apiKey.split(',').map(k => k.trim()).filter(k => k);
-        apiKey = apiKeys[Math.floor(Math.random() * apiKeys.length)];
-        console.log(`OpenAI Selected API Key: ${apiKey}`);
-      }
+      const apiKey = selectApiKey(request, config, 'openai');
       const assert = (success) => {
         if (!success) {
-          throw new HttpError("The specified HTTP method is not allowed for the requested resource", 400);
+          throw new HttpError("The specified HTTP method is not allowed for the requested resource", 405, 'method_not_allowed');
         }
       };
-      const { pathname } = new URL(request.url);
-      switch (true) {
-        case pathname.endsWith("/chat/completions"):
+      switch (endpoint) {
+        case "chat/completions":
           assert(request.method === "POST");
-          return handleCompletions(await request.json(), apiKey)
+          return handleCompletions(await readJsonLimited(request, config.maxBodyBytes), apiKey, config, request.signal)
             .catch(errHandler);
-        case pathname.endsWith("/embeddings"):
+        case "completions":
           assert(request.method === "POST");
-          return handleEmbeddings(await request.json(), apiKey)
+          return handleLegacyCompletions(await readJsonLimited(request, config.maxBodyBytes), apiKey, config, request.signal)
             .catch(errHandler);
-        case pathname.endsWith("/models"):
+        case "responses":
+          assert(request.method === "POST");
+          return handleResponses(await readJsonLimited(request, config.maxBodyBytes), apiKey, config, request.signal)
+            .catch(errHandler);
+        case "embeddings":
+          assert(request.method === "POST");
+          return handleEmbeddings(await readJsonLimited(request, config.maxBodyBytes), apiKey, config, request.signal)
+            .catch(errHandler);
+        case "models":
           assert(request.method === "GET");
-          return handleModels(apiKey)
+          return handleModels(apiKey, config, request.signal)
+            .catch(errHandler);
+        case "passthrough":
+          return proxyOfficialOpenAI(request, apiKey, config, path)
             .catch(errHandler);
         default:
-          throw new HttpError("404 Not Found", 404);
+          throw new HttpError("404 Not Found", 404, 'not_found');
       }
     } catch (err) {
       return errHandler(err);
@@ -50,28 +52,17 @@ export default {
   }
 };
 
-class HttpError extends Error {
-  constructor(message, status) {
-    super(message);
-    this.name = this.constructor.name;
-    this.status = status;
-  }
-}
-
 const fixCors = ({ headers, status, statusText }) => {
   headers = new Headers(headers);
-  headers.set("Access-Control-Allow-Origin", "*");
   return { headers, status, statusText };
 };
 
-const handleOPTIONS = async () => {
-  return new Response(null, {
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "*",
-      "Access-Control-Allow-Headers": "*",
-    }
-  });
+const transformedHeaders = (response, contentType = "application/json; charset=utf-8") => {
+  const headers = copyResponseHeaders(response.headers);
+  headers.delete("content-length");
+  headers.delete("content-encoding");
+  headers.set("content-type", contentType);
+  return headers;
 };
 
 const BASE_URL = "https://generativelanguage.googleapis.com";
@@ -85,10 +76,12 @@ const makeHeaders = (apiKey, more) => ({
   ...more
 });
 
-async function handleModels (apiKey) {
-  const response = await fetch(`${BASE_URL}/${API_VERSION}/models`, {
+async function handleModels (apiKey, config, signal) {
+  const response = await fetchWithTimeout(`${BASE_URL}/${API_VERSION}/models`, {
     headers: makeHeaders(apiKey),
-  });
+    signal,
+  }, config.upstreamTimeoutMs);
+  if (!response.ok) return openAIUpstreamError(response);
   let { body } = response;
   if (response.ok) {
     const { models } = JSON.parse(await response.text());
@@ -102,11 +95,13 @@ async function handleModels (apiKey) {
       })),
     }, null, "  ");
   }
-  return new Response(body, fixCors(response));
+  return new Response(body, response.ok
+    ? { status: response.status, headers: transformedHeaders(response) }
+    : fixCors(response));
 }
 
 const DEFAULT_EMBEDDINGS_MODEL = "text-embedding-004";
-async function handleEmbeddings (req, apiKey) {
+async function handleEmbeddings (req, apiKey, config, signal) {
   if (typeof req.model !== "string") {
     throw new HttpError("model is not specified", 400);
   }
@@ -122,7 +117,7 @@ async function handleEmbeddings (req, apiKey) {
   if (!Array.isArray(req.input)) {
     req.input = [ req.input ];
   }
-  const response = await fetch(`${BASE_URL}/${API_VERSION}/${model}:batchEmbedContents`, {
+  const response = await fetchWithTimeout(`${BASE_URL}/${API_VERSION}/${model}:batchEmbedContents`, {
     method: "POST",
     headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
     body: JSON.stringify({
@@ -131,8 +126,10 @@ async function handleEmbeddings (req, apiKey) {
         content: { parts: { text } },
         outputDimensionality: req.dimensions,
       }))
-    })
-  });
+    }),
+    signal,
+  }, config.upstreamTimeoutMs);
+  if (!response.ok) return openAIUpstreamError(response);
   let { body } = response;
   if (response.ok) {
     const { embeddings } = JSON.parse(await response.text());
@@ -146,12 +143,13 @@ async function handleEmbeddings (req, apiKey) {
       model: req.model,
     }, null, "  ");
   }
-  return new Response(body, fixCors(response));
+  return new Response(body, response.ok
+    ? { status: response.status, headers: transformedHeaders(response) }
+    : fixCors(response));
 }
 
-const DEFAULT_MODEL = "gemini-2.5-flash";
-async function handleCompletions (req, apiKey) {
-  let model = DEFAULT_MODEL;
+async function handleCompletions (req, apiKey, config, signal) {
+  let model = config.defaultGeminiModel;
   switch (true) {
     case typeof req.model !== "string":
       break;
@@ -180,20 +178,22 @@ async function handleCompletions (req, apiKey) {
     case model.endsWith(":search"):
       model = model.substring(0, model.length - 7);
       // eslint-disable-next-line no-fallthrough
-    case req.model.endsWith("-search-preview"):
+    case model.endsWith("-search-preview"):
     case req.tools?.some(tool => tool.function?.name === 'googleSearch'):
       body.tools = body.tools || [];
       body.tools.push({googleSearch: {}});
   }
-  console.log(body.tools)
   const TASK = req.stream ? "streamGenerateContent" : "generateContent";
   let url = `${BASE_URL}/${API_VERSION}/models/${model}:${TASK}`;
   if (req.stream) { url += "?alt=sse"; }
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
     body: JSON.stringify(body),
-  });
+    signal,
+  }, config.upstreamTimeoutMs);
+
+  if (!response.ok) return openAIUpstreamError(response);
 
   body = response.body;
   if (response.ok) {
@@ -224,13 +224,274 @@ async function handleCompletions (req, apiKey) {
           throw new Error("Invalid completion object");
         }
       } catch (err) {
-        console.error("Error parsing response:", err);
         return new Response(body, fixCors(response)); // output as is
       }
       body = processCompletionsResponse(body, model, id);
     }
   }
-  return new Response(body, fixCors(response));
+  return new Response(body, response.ok
+    ? { status: response.status, headers: transformedHeaders(response, req.stream ? "text/event-stream; charset=utf-8" : undefined) }
+    : fixCors(response));
+}
+
+async function handleLegacyCompletions(req, apiKey, config, signal) {
+  if (Array.isArray(req.prompt) && req.prompt.length !== 1) {
+    throw new HttpError("Only one prompt is supported per request", 400, "unsupported_prompt_batch");
+  }
+  const prompt = Array.isArray(req.prompt) ? req.prompt[0] : req.prompt;
+  if (typeof prompt !== "string") {
+    throw new HttpError("prompt must be a string", 400, "invalid_prompt");
+  }
+  const response = await handleCompletions({
+    ...req,
+    messages: [{ role: "user", content: prompt }],
+  }, apiKey, config, signal);
+  if (!response.ok || req.stream) return response;
+  const chat = await response.json();
+  return new Response(JSON.stringify({
+    id: chat.id,
+    object: "text_completion",
+    created: chat.created,
+    model: chat.model,
+    choices: chat.choices.map((choice) => ({
+      text: choice.message?.content ?? "",
+      index: choice.index,
+      logprobs: choice.logprobs,
+      finish_reason: choice.finish_reason,
+    })),
+    usage: chat.usage,
+  }), { status: response.status, headers: transformedHeaders(response) });
+}
+
+async function handleResponses(req, apiKey, config, signal) {
+  const chatRequest = responsesToChatRequest(req);
+  const response = await handleCompletions(chatRequest, apiKey, config, signal);
+  if (!response.ok) return response;
+  if (req.stream) return responsesStream(response, req.model || config.defaultGeminiModel);
+  const chat = await response.json();
+  const output = [];
+  for (const choice of chat.choices ?? []) {
+    if (choice.message?.content != null) {
+      output.push({
+        id: "msg_" + generateId(), type: "message", status: "completed", role: "assistant",
+        content: [{ type: "output_text", text: choice.message.content, annotations: [] }],
+      });
+    }
+    for (const toolCall of choice.message?.tool_calls ?? []) {
+      output.push({
+        type: "function_call", id: toolCall.id, call_id: toolCall.id,
+        name: toolCall.function.name, arguments: toolCall.function.arguments, status: "completed",
+      });
+    }
+  }
+  const body = {
+    id: chat.id.replace(/^chatcmpl-/, "resp_"), object: "response",
+    created_at: chat.created, status: "completed", model: chat.model,
+    output, parallel_tool_calls: true,
+    usage: chat.usage && {
+      input_tokens: chat.usage.prompt_tokens,
+      output_tokens: chat.usage.completion_tokens,
+      total_tokens: chat.usage.total_tokens,
+    },
+    error: null,
+  };
+  return new Response(JSON.stringify(body), {
+    status: response.status,
+    headers: transformedHeaders(response),
+  });
+}
+
+function responsesToChatRequest(req) {
+  if (req.previous_response_id) {
+    throw new HttpError("previous_response_id is not supported by this stateless gateway", 400, "unsupported_parameter");
+  }
+  const messages = [];
+  if (req.instructions) messages.push({ role: "system", content: req.instructions });
+  if (typeof req.input === "string") {
+    messages.push({ role: "user", content: req.input });
+  } else if (Array.isArray(req.input)) {
+    for (const item of req.input) {
+      if (item.type === "function_call_output") {
+        messages.push({ role: "tool", tool_call_id: item.call_id, content: item.output });
+        continue;
+      }
+      if (item.type === "function_call") {
+        messages.push({
+          role: "assistant", content: null,
+          tool_calls: [{
+            id: item.call_id || item.id, type: "function",
+            function: { name: item.name, arguments: item.arguments || "{}" },
+          }],
+        });
+        continue;
+      }
+      const role = item.role === "developer" ? "system" : (item.role || "user");
+      messages.push({ role, content: responseContentToChat(item.content) });
+    }
+  } else {
+    throw new HttpError("input must be a string or an array", 400, "invalid_input");
+  }
+  const tools = req.tools?.map((tool) => {
+    if (tool.type === "web_search" || tool.type === "web_search_preview") {
+      return { type: "function", function: { name: "googleSearch", parameters: { type: "object", properties: {} } } };
+    }
+    if (tool.type !== "function") {
+      throw new HttpError(`Unsupported Responses tool type: ${tool.type}`, 400, "unsupported_tool_type");
+    }
+    return {
+      type: "function",
+      function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+    };
+  });
+  let toolChoice = req.tool_choice;
+  if (toolChoice?.type === "function" && toolChoice.name) {
+    toolChoice = { type: "function", function: { name: toolChoice.name } };
+  }
+  return {
+    model: req.model,
+    messages,
+    tools,
+    tool_choice: toolChoice,
+    stream: Boolean(req.stream),
+    stream_options: req.stream ? { include_usage: true } : undefined,
+    temperature: req.temperature,
+    top_p: req.top_p,
+    max_completion_tokens: req.max_output_tokens,
+    response_format: responsesFormatToChat(req.text?.format),
+    reasoning_effort: req.reasoning?.effort,
+  };
+}
+
+function responsesFormatToChat(format) {
+  if (!format) return undefined;
+  if (format.type !== "json_schema") return format;
+  return {
+    type: "json_schema",
+    json_schema: {
+      name: format.name, description: format.description, schema: format.schema, strict: format.strict,
+    },
+  };
+}
+
+function responseContentToChat(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((part) => {
+    if (part.type === "input_text" || part.type === "output_text") return { type: "text", text: part.text };
+    if (part.type === "input_image") return { type: "image_url", image_url: { url: part.image_url } };
+    throw new HttpError(`Unsupported Responses content type: ${part.type}`, 400, "unsupported_content_type");
+  });
+}
+
+function responsesStream(response, model) {
+  const id = "resp_" + generateId();
+  const messageId = "msg_" + generateId();
+  const reader = response.body
+    .pipeThrough(new TextDecoderStream())
+    .pipeThrough(new TransformStream({
+      buffer: "", sequence: 0, started: false, completed: false, text: "", toolItems: [],
+      transform(chunk, controller) {
+        this.buffer += chunk;
+        const records = this.buffer.split(/\r?\n\r?\n/);
+        this.buffer = records.pop() || "";
+        for (const record of records) {
+          const dataLine = record.split(/\r?\n/).find((line) => line.startsWith("data: "));
+          if (!dataLine || dataLine === "data: [DONE]") continue;
+          let event;
+          try { event = JSON.parse(dataLine.slice(6)); } catch { continue; }
+          if (!this.started) {
+            this.started = true;
+            enqueueResponseEvent(controller, "response.created", this.sequence++, {
+              response: { id, object: "response", status: "in_progress", model, output: [] },
+            });
+            enqueueResponseEvent(controller, "response.output_item.added", this.sequence++, {
+              output_index: 0,
+              item: { id: messageId, type: "message", status: "in_progress", role: "assistant", content: [] },
+            });
+            enqueueResponseEvent(controller, "response.content_part.added", this.sequence++, {
+              item_id: messageId, output_index: 0, content_index: 0,
+              part: { type: "output_text", text: "", annotations: [] },
+            });
+          }
+          const delta = event.choices?.[0]?.delta?.content;
+          if (delta) {
+            this.text += delta;
+            enqueueResponseEvent(controller, "response.output_text.delta", this.sequence++, {
+              item_id: messageId, output_index: 0, content_index: 0, delta,
+            });
+          }
+          for (const toolCall of event.choices?.[0]?.delta?.tool_calls ?? []) {
+            const item = {
+              type: "function_call", id: toolCall.id, call_id: toolCall.id,
+              name: toolCall.function.name, arguments: toolCall.function.arguments, status: "completed",
+            };
+            const outputIndex = this.toolItems.length + 1;
+            this.toolItems.push(item);
+            enqueueResponseEvent(controller, "response.output_item.added", this.sequence++, {
+              output_index: outputIndex, item: { ...item, arguments: "", status: "in_progress" },
+            });
+            enqueueResponseEvent(controller, "response.function_call_arguments.delta", this.sequence++, {
+              item_id: item.id, output_index: outputIndex, delta: item.arguments,
+            });
+            enqueueResponseEvent(controller, "response.function_call_arguments.done", this.sequence++, {
+              item_id: item.id, output_index: outputIndex, arguments: item.arguments,
+            });
+            enqueueResponseEvent(controller, "response.output_item.done", this.sequence++, {
+              output_index: outputIndex, item,
+            });
+          }
+          if (event.choices?.[0]?.finish_reason && !this.completed) {
+            this.completed = true;
+            const message = {
+              id: messageId, type: "message", status: "completed", role: "assistant",
+              content: [{ type: "output_text", text: this.text, annotations: [] }],
+            };
+            enqueueResponseEvent(controller, "response.output_text.done", this.sequence++, {
+              item_id: messageId, output_index: 0, content_index: 0, text: this.text,
+            });
+            enqueueResponseEvent(controller, "response.content_part.done", this.sequence++, {
+              item_id: messageId, output_index: 0, content_index: 0, part: message.content[0],
+            });
+            enqueueResponseEvent(controller, "response.output_item.done", this.sequence++, {
+              output_index: 0, item: message,
+            });
+            enqueueResponseEvent(controller, "response.completed", this.sequence++, {
+              response: {
+                id, object: "response", status: "completed", model,
+                output: [message, ...this.toolItems], error: null,
+                usage: event.usage && {
+                  input_tokens: event.usage.prompt_tokens,
+                  output_tokens: event.usage.completion_tokens,
+                  total_tokens: event.usage.total_tokens,
+                },
+              },
+            });
+          }
+        }
+      },
+    }))
+    .pipeThrough(new TextEncoderStream());
+  return new Response(reader, { status: 200, headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" } });
+}
+
+function enqueueResponseEvent(controller, type, sequenceNumber, payload) {
+  controller.enqueue(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: sequenceNumber, ...payload })}\n\n`);
+}
+
+async function openAIUpstreamError(response) {
+  let message = `Gemini upstream returned ${response.status}`;
+  let code = 'upstream_error';
+  try {
+    const data = await response.json();
+    message = data.error?.message || message;
+    code = data.error?.status || code;
+  } catch { /* ignore malformed upstream error bodies */ }
+  return new Response(JSON.stringify({
+    error: { message, type: code.toLowerCase(), param: null, code },
+  }), {
+    status: response.status,
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+  });
 }
 
 const adjustProps = (schemaPart) => {
@@ -252,17 +513,6 @@ const adjustSchema = (schema) => {
   return adjustProps(schema);
 };
 
-const harmCategory = [
-  "HARM_CATEGORY_HATE_SPEECH",
-  "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-  "HARM_CATEGORY_DANGEROUS_CONTENT",
-  "HARM_CATEGORY_HARASSMENT",
-  "HARM_CATEGORY_CIVIC_INTEGRITY",
-];
-const safetySettings = harmCategory.map(category => ({
-  category,
-  threshold: "BLOCK_NONE",
-}));
 const fieldsMap = {
   frequency_penalty: "frequencyPenalty",
   max_completion_tokens: "maxOutputTokens",
@@ -318,18 +568,9 @@ const transformConfig = (req) => {
 const parseImg = async (url) => {
   let mimeType, data;
   if (url.startsWith("http://") || url.startsWith("https://")) {
-    try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`${response.status} ${response.statusText} (${url})`);
-      }
-      mimeType = response.headers.get("content-type");
-      data = Buffer.from(await response.arrayBuffer()).toString("base64");
-    } catch (err) {
-      throw new Error("Error fetching image: " + err.toString());
-    }
+    throw new HttpError("Remote image URLs are disabled; use a data URL", 400, "remote_media_disabled");
   } else {
-    const match = url.match(/^data:(?<mimeType>.*?)(;base64)?,(?<data>.*)$/);
+    const match = url.match(/^data:(?<mimeType>[^;,]+);base64,(?<data>[A-Za-z0-9+/=\r\n]+)$/);
     if (!match) {
       throw new HttpError("Invalid image data: " + url, 400);
     }
@@ -351,8 +592,7 @@ const transformFnResponse = ({ content, tool_call_id }, parts) => {
   try {
     response = JSON.parse(content);
   } catch (err) {
-    console.error("Error parsing function response content:", err);
-    throw new HttpError("Invalid function response: " + content, 400);
+    throw new HttpError("Invalid function response JSON", 400, "invalid_tool_result");
   }
   if (typeof response !== "object" || response === null || Array.isArray(response)) {
     response = { result: response };
@@ -386,8 +626,7 @@ const transformFnCalls = ({ tool_calls }) => {
     try {
       args = JSON.parse(argstr);
     } catch (err) {
-      console.error("Error parsing function arguments:", err);
-      throw new HttpError("Invalid function arguments: " + argstr, 400);
+      throw new HttpError("Invalid function arguments JSON", 400, "invalid_tool_arguments");
     }
     calls[id] = {i, name};
     return {
@@ -447,16 +686,17 @@ const transformMessages = async (messages) => {
   for (const item of messages) {
     switch (item.role) {
       case "system":
-        system_instruction = { parts: await transformMsg(item) };
+        system_instruction ??= { parts: [] };
+        system_instruction.parts.push(...await transformMsg(item));
         continue;
       case "tool":
         // eslint-disable-next-line no-case-declarations
         let { role, parts } = contents[contents.length - 1] ?? {};
-        if (role !== "function") {
+        if (role !== "user" || !parts?.calls) {
           const calls = parts?.calls;
           parts = []; parts.calls = calls;
           contents.push({
-            role: "function", // ignored
+            role: "user",
             parts
           });
         }
@@ -509,10 +749,29 @@ const transformTools = (req) => {
 
 const transformRequest = async (req) => ({
   ...await transformMessages(req.messages),
-  safetySettings,
   generationConfig: transformConfig(req),
   ...transformTools(req),
 });
+
+async function proxyOfficialOpenAI(request, apiKey, config, path) {
+  const suffix = path.replace(/^\/v1beta\/openai\/?/, '').replace(/^\/v1\/?/, '');
+  const incoming = new URL(request.url);
+  const target = new URL(`/v1beta/openai/${suffix}${incoming.search}`, BASE_URL);
+  const headers = copyRequestHeaders(request.headers, { dropCredentials: true });
+  headers.set('authorization', `Bearer ${apiKey}`);
+  headers.set('x-goog-api-client', 'ggproxy-openai/2.0.0');
+  const response = await fetchWithTimeout(target, {
+    method: request.method,
+    headers,
+    body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body,
+    signal: request.signal,
+  }, config.upstreamTimeoutMs);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: copyResponseHeaders(response.headers),
+  });
+}
 
 const generateId = () => {
   const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -568,12 +827,6 @@ const transformUsage = (data) => ({
 const checkPromptBlock = (choices, promptFeedback, key) => {
   if (choices.length) { return; }
   if (promptFeedback?.blockReason) {
-    console.log("Prompt block reason:", promptFeedback.blockReason);
-    if (promptFeedback.blockReason === "SAFETY") {
-      promptFeedback.safetyRatings
-        .filter(r => r.blocked)
-        .forEach(r => console.log(r));
-    }
     choices.push({
       index: 0,
       [key]: null,
@@ -612,7 +865,6 @@ function parseStream (chunk, controller) {
 }
 function parseStreamFlush (controller) {
   if (this.buffer) {
-    console.error("Invalid data:", this.buffer);
     controller.enqueue(this.buffer);
     this.shared.is_buffers_rest = true;
   }
@@ -631,8 +883,7 @@ function toOpenAiStream (line, controller) {
       throw new Error("Invalid completion chunk object");
     }
   } catch (err) {
-    console.error("Error parsing response:", err);
-    if (!this.shared.is_buffers_rest) { line =+ delimiter; }
+    if (!this.shared.is_buffers_rest) { line += delimiter; }
     controller.enqueue(line); // output as is
     return;
   }

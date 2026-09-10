@@ -1,159 +1,167 @@
-# Gemini Balance Lite
+# ggproxy
 
-## 项目简介
+一个以 Gemini API 为上游的轻量边缘网关。它支持 Gemini 原生格式、OpenAI 格式和 Anthropic Claude 格式，并尽可能保持官方 URL 路径不变。
 
-Gemini API 代理, 使用边缘函数把Gemini API免费中转到国内。还可以聚合多个Gemini API Key，随机选取API Key的使用实现负载均衡，使得Gemini API免费成倍增加。
+## URL 兼容
 
-## Vercel部署(推荐)
-[![Deploy to Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/tech-shrimp/gemini-balance-lite)
+通常只需要把官方域名替换为自己的部署域名：
 
+```text
+https://generativelanguage.googleapis.com/v1beta/models/...
+https://proxy.example/v1beta/models/...
 
-1. 点击部署按钮⬆️一键部署。
-2. 国内使用需要配置自定义域名
-    <details>
-    <summary>配置自定义域名：</summary>
+https://api.openai.com/v1/chat/completions
+https://proxy.example/v1/chat/completions
 
-    ![image](/docs/images/5.png)
-    </details>
-3. 去[AIStudio](https://aistudio.google.com)申请一个免费Gemini API Key
-<br>将API Key与自定义的域名填入AI客户端即可使用，如果有多个API Key用逗号分隔
-    <details>
-    <summary>以Cherry Studio为例：</summary>
-
-    ![image](/docs/images/2.png)
-    </details>
-
-## Deno部署
-
-1. [fork](https://github.com/tech-shrimp/gemini-balance-lite/fork)本项目
-2. 登录/注册 https://dash.deno.com/
-3. 创建项目 https://dash.deno.com/new_project
-4. 选择此项目，填写项目名字（请仔细填写项目名字，关系到自动分配的域名）
-5. Entrypoint 填写 `src/deno_index.ts` 其他字段留空 
-   <details>
-   <summary>如图</summary>
-   
-   ![image](/docs/images/3.png)
-   </details>
-6. 点击 <b>Deploy Project</b>
-7. 部署成功后获得域名
-8. 国内使用需要配置自定义域名
-9. 去[AIStudio](https://aistudio.google.com)申请一个免费Gemini API Key
-10. 将API Key与分配的域名填入AI客户端即可使用，如果有多个API Key用逗号分隔
-
-<details>
-<summary>以Cherry Studio为例：</summary>
-
-![image](/docs/images/2.png)
-</details>
-
-## Cloudflare Worker 部署
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/tech-shrimp/gemini-balance-lite)
-
-0. CF Worker有可能会分配香港的CDN节点导致无法使用(Gemini不允许香港IP连接)
-0. 广东地区不建议使用Cloudflare Worker 部署
-1. 点击部署按钮
-2. 登录Cloudflare账号
-3. 链接Github账户，部署
-4. 打开dash.cloudflare.com，查看部署后的worker
-6. 国内使用需要配置自定义域名
-<details>
-<summary>配置自定义域名：</summary>
-
-![image](/docs/images/4.png)
-</details>
-
-## Netlify部署
-[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/tech-shrimp/gemini-balance-lite)
-<br>点击部署按钮，登录Github账户即可
-<br>免费分配域名，国内可直连。
-<br>但是不稳定
-
-<details>
-<summary>将分配的域名复制下来，如图：</summary>
-
-![image](/docs/images/1.png)
-</details>
-
-去[AIStudio](https://aistudio.google.com)申请一个免费Gemini API Key
-<br>将API Key与分配的域名填入AI客户端即可使用，如果有多个API Key用逗号分隔
-
-<details>
-<summary>以Cherry Studio为例：</summary>
-
-![image](/docs/images/2.png)
-</details>
-
-## API 说明
-
-### Gemini 代理
-
-可以使用 Gemini 的原生 API 格式进行代理请求。
-**Curl 示例:**
-```bash
-curl -X POST --location 'https://<YOUR_DEPLOYED_DOMAIN>/v1beta/models/gemini-2.5-pro:generateContent' \
---header 'Content-Type: application/json' \
---header 'x-goog-api-key: <YOUR_GEMINI_API_KEY_1>,<YOUR_GEMINI_API_KEY_2>' \
---data '{
-    "contents": [
-        {
-         "role": "user",
-         "parts": [
-            {
-               "text": "Hello"
-            }
-         ]
-      }
-    ]
-}'
+https://api.anthropic.com/v1/messages
+https://proxy.example/v1/messages
 ```
-**Curl 示例:（流式）**
-```bash
-curl -X POST --location 'https://<YOUR_DEPLOYED_DOMAIN>/v1beta/models/gemini-2.5-pro:generateContent?alt=sse' \
---header 'Content-Type: application/json' \
---header 'x-goog-api-key: <YOUR_GEMINI_API_KEY_1>,<YOUR_GEMINI_API_KEY_2>' \
---data '{
-    "contents": [
-        {
-         "role": "user",
-         "parts": [
-            {
-               "text": "Hello"
-            }
-         ]
-      }
-    ]
-}'
-```
-> 注意: 请将 `<YOUR_DEPLOYED_DOMAIN>` 替换为你的部署域名，并将 `<YOUR_GEMINI_API_KEY>` 替换为你的 Gemini API Ke，如果有多个用逗号分隔
 
-### API Key 校验
+`/v1/models` 同时存在于 Gemini 和 OpenAI 协议中。网关按凭证头确定协议：
 
-可以通过向 `/verify` 端点发送请求来校验你的 API Key 是否有效。可以一次性校验多个 Key，用逗号隔开。
+- `x-goog-api-key`：Gemini
+- `Authorization: Bearer ...`：OpenAI
 
-**Curl 示例:**
-```bash
-curl -X POST --location 'https://<YOUR_DEPLOYED_DOMAIN>/verify' \
---header 'x-goog-api-key: <YOUR_GEMINI_API_KEY_1>,<YOUR_GEMINI_API_KEY_2>'
-```
+如客户端无法提供可判定的请求头，可使用明确的备用前缀：`/gemini`、`/openai` 或 `/anthropic`。
+
+## 支持范围
+
+### Gemini 原生格式
+
+`/v1/*`、`/v1beta/*` 和 `/upload/v1/*`、`/upload/v1beta/*` 透明转发，包括：
+
+- `generateContent` 和 `streamGenerateContent`
+- 新版 Interactions API
+- Models、Embeddings、Token Count、Files、Caches 等原生资源
+- 普通 JSON、SSE 和二进制上传
+
+原生请求不会经过协议转换，因此最能保留 Gemini 的完整能力。
 
 ### OpenAI 格式
 
-本项目兼容 OpenAI 的 API 格式，你可以通过 `/chat` 或 `/chat/completions` 端点来发送请求。
+- `POST /v1/chat/completions`
+- `POST /v1/completions`
+- `POST /v1/responses`
+- `POST /v1/embeddings`
+- `GET /v1/models`
+- `POST /v1beta/openai/chat/completions` 等 Google 官方兼容路径
 
-**Curl 示例:**
-```bash
-curl -X POST --location 'https://<YOUR_DEPLOYED_DOMAIN>/chat/completions' \
---header 'Content-Type: application/json' \
---header 'Authorization: Bearer <YOUR_GEMINI_API_KEY>' \
---data '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-            "role": "user",
-            "content": "你好"
-        }
-    ]
-}'
+支持非流式和 SSE、文本、base64 图片、音频输入、函数工具、结构化输出及基础 usage 映射。
+
+由于所有请求最终调用 Gemini，OpenAI 模型名会映射至 `DEFAULT_GEMINI_MODEL`。也可以直接填写 `gemini-*`、`gemma-*` 或 `learnlm-*` 模型名。
+
+### Anthropic Claude 格式
+
+- `POST /v1/messages`
+- `POST /v1/messages/count_tokens`
+- `anthropic-version: 2023-06-01`
+- 非流式与 Claude 具名 SSE
+- 文本、base64 图片/文档、工具调用与工具结果
+
+Claude 模型名同样映射至 `DEFAULT_GEMINI_MODEL`。
+
+## 安全配置
+
+安全默认值：
+
+- 不记录 API Key、Authorization、请求体或查询参数。
+- CORS 默认关闭。
+- `/verify` 默认关闭。
+- 远程媒体 URL 默认拒绝，避免代理成为 SSRF 出口；请使用 base64 data URL。
+- 默认最大请求体为 10 MiB。
+- 默认上游超时为 120 秒。
+- 上游错误不会向客户端返回网关堆栈。
+
+建议公开部署时配置独立的网关访问令牌：
+
+```text
+PROXY_TOKEN=随机长令牌
 ```
+
+调用时增加：
+
+```http
+x-proxy-token: 随机长令牌
+```
+
+这个令牌与 Gemini API Key 分离，防止代理域名被第三方直接滥用。
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+|---|---:|---|
+| `PROXY_TOKEN` | 空 | 可选的网关访问令牌，生产环境强烈建议配置 |
+| `GEMINI_API_KEYS` | 空 | 服务端 Gemini Key 池，多个 Key 用逗号分隔 |
+| `DEFAULT_GEMINI_MODEL` | `gemini-2.5-flash` | 非 Gemini 模型名的默认映射目标 |
+| `MAX_BODY_BYTES` | `10485760` | JSON/请求体大小限制 |
+| `UPSTREAM_TIMEOUT_MS` | `120000` | 上游超时 |
+| `CORS_ORIGINS` | 空 | 允许的 Origin，逗号分隔；`*` 表示全部 |
+| `VERIFY_ENABLED` | `false` | 是否启用 `/verify` |
+
+API Key 来源按顺序包括官方请求头和可选的 `GEMINI_API_KEYS`。为了兼容旧版本，官方 Key 头仍支持逗号分隔多个 Key，但新部署更推荐使用服务端 Key 池。
+
+## 调用示例
+
+### Gemini
+
+```bash
+curl "https://proxy.example/v1beta/models/gemini-2.5-flash:generateContent" \
+  -H "x-goog-api-key: $GEMINI_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"contents":[{"parts":[{"text":"Hello"}]}]}'
+```
+
+### OpenAI
+
+```bash
+curl "https://proxy.example/v1/chat/completions" \
+  -H "Authorization: Bearer $GEMINI_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+### Claude
+
+```bash
+curl "https://proxy.example/v1/messages" \
+  -H "x-api-key: $GEMINI_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{"model":"claude-compatible","max_tokens":512,"messages":[{"role":"user","content":"Hello"}]}'
+```
+
+## 部署
+
+项目提供四个入口：
+
+- Cloudflare Workers：`src/index.js` / `wrangler.toml`
+- Vercel Edge：`api/vercel_index.js` / `vercel.json`
+- Deno Deploy：`src/deno_index.ts`
+- Netlify Functions：`netlify/functions/api.js` / `netlify.toml`
+
+Netlify 已配置 `/*` 到函数入口的全路径重写。
+
+## 本地检查
+
+```bash
+npm test
+npm run check
+```
+
+测试使用 Node.js 内置测试框架，不增加运行时依赖，也不会调用真实 Gemini API。
+
+## 兼容性边界
+
+三家协议并非一一对应。当前实现遵循以下规则：
+
+- Gemini 原生请求优先无损透传。
+- 可可靠映射的字段进行转换。
+- 不支持的内容类型返回明确的 4xx，而不是静默丢弃。
+- OpenAI/Claude 的厂商专属托管工具不伪装成已支持。
+- 远程图片 URL 默认拒绝；base64 图片可正常转换。
+- Responses 流式接口覆盖文本输出；复杂多工具流仍建议优先使用 Chat Completions 或 Gemini 原生协议。
+
+## License
+
+MIT
 
