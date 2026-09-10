@@ -1,9 +1,4 @@
 # Gemini Balance Lite
-# Gemini API 代理和负载均衡无服务器轻量版（边缘函数）
-
-### 作者：技术爬爬虾
-[B站](https://space.bilibili.com/316183842)，[Youtube](https://www.youtube.com/@Tech_Shrimp)，抖音，公众号 全网同名。转载请注明作者。
-
 
 ## 项目简介
 
@@ -27,9 +22,6 @@ Gemini API 代理, 使用边缘函数把Gemini API免费中转到国内。还可
 
     ![image](/docs/images/2.png)
     </details>
-
-
-
 
 ## Deno部署
 
@@ -55,7 +47,6 @@ Gemini API 代理, 使用边缘函数把Gemini API免费中转到国内。还可
 ![image](/docs/images/2.png)
 </details>
 
-
 ## Cloudflare Worker 部署
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/tech-shrimp/gemini-balance-lite)
 
@@ -71,7 +62,6 @@ Gemini API 代理, 使用边缘函数把Gemini API免费中转到国内。还可
 
 ![image](/docs/images/4.png)
 </details>
-
 
 ## Netlify部署
 [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/tech-shrimp/gemini-balance-lite)
@@ -94,23 +84,7 @@ Gemini API 代理, 使用边缘函数把Gemini API免费中转到国内。还可
 ![image](/docs/images/2.png)
 </details>
 
-
-
-## 打赏
-#### 帮忙点点关注点点赞，谢谢啦~
-B站：[https://space.bilibili.com/316183842](https://space.bilibili.com/316183842)<br>
-Youtube: [https://www.youtube.com/@Tech_Shrimp](https://www.youtube.com/@Tech_Shrimp)
-
-
-## 本地调试
-
-1. 安装NodeJs
-2. npm install -g vercel
-3. cd 项目根目录
-4. vercel dev
-
 ## API 说明
-
 
 ### Gemini 代理
 
@@ -152,7 +126,6 @@ curl -X POST --location 'https://<YOUR_DEPLOYED_DOMAIN>/v1beta/models/gemini-2.5
 }'
 ```
 > 注意: 请将 `<YOUR_DEPLOYED_DOMAIN>` 替换为你的部署域名，并将 `<YOUR_GEMINI_API_KEY>` 替换为你的 Gemini API Ke，如果有多个用逗号分隔
-
 
 ### API Key 校验
 
