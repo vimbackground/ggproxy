@@ -141,6 +141,11 @@ curl "https://proxy.example/v1/messages" \
 
 Netlify 已配置 `/*` 到函数入口的全路径重写。
 
+详细文档：
+
+- [手动部署操作手册](docs/手动部署操作手册.md)
+- [一键自动化部署操作指南](docs/一键自动化部署操作指南.md)
+
 ## 本地检查
 
 ```bash
@@ -164,4 +169,3 @@ npm run check
 ## License
 
 MIT
-
