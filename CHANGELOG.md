@@ -6,10 +6,16 @@
 
 ## [未发布]
 
+### 新增
+
+- 新增 `/admin` 轻量后台：可查看安全配置状态，并创建或撤销客户端访问令牌。
+- 新增 Cloudflare Workers KV 与兼容 Upstash REST 的 KV 存储适配；令牌仅保存 SHA-256 哈希，明文仅在创建时返回一次。
+- 新增面向普通用户的 Kelivo 接入教程。
+
 ### 变更
 
-- 将 Cloudflare Worker 脚本名统一为 `ggproxy`，与仓库和服务标识一致。
-- Cloudflare、Vercel、Deno 与 Netlify 文档改为连接当前 GitHub 仓库，移除会复制或新建仓库的部署按钮流程。
+- 正式部署范围收敛为 Cloudflare Workers 与 Vercel Edge；Deno 和 Netlify 仅保留未承诺的最小入口兼容层。
+- `PROXY_TOKEN` 保持兼容；新增 `PROXY_TOKENS` 静态令牌列表，并允许已验证的网关令牌出现在 OpenAI 的 `Authorization: Bearer` 中，以支持普通客户端直接配置。
 
 ## [2.0.0] - 2026-09-11
 

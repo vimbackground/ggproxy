@@ -34,7 +34,21 @@ export function getConfig(env = {}) {
   return {
     geminiApiKeys: list(value(env, 'GEMINI_API_KEYS')),
     defaultGeminiModel: value(env, 'DEFAULT_GEMINI_MODEL') || 'gemini-2.5-flash',
-    proxyToken: value(env, 'PROXY_TOKEN') || '',
+    // PROXY_TOKEN remains supported for existing deployments. PROXY_TOKENS is
+    // useful when a small number of static client credentials is sufficient.
+    proxyTokens: [...new Set([
+      ...list(value(env, 'PROXY_TOKEN')),
+      ...list(value(env, 'PROXY_TOKENS')),
+    ])],
+    adminToken: value(env, 'ADMIN_TOKEN') || '',
+    adminStoreUrl: value(env, 'ADMIN_KV_REST_URL')
+      || value(env, 'UPSTASH_REDIS_REST_URL')
+      || value(env, 'KV_REST_API_URL')
+      || '',
+    adminStoreToken: value(env, 'ADMIN_KV_REST_TOKEN')
+      || value(env, 'UPSTASH_REDIS_REST_TOKEN')
+      || value(env, 'KV_REST_API_TOKEN')
+      || '',
     maxBodyBytes: positiveInt(value(env, 'MAX_BODY_BYTES'), DEFAULTS.maxBodyBytes),
     upstreamTimeoutMs: positiveInt(value(env, 'UPSTREAM_TIMEOUT_MS'), DEFAULTS.upstreamTimeoutMs),
     corsOrigins: list(value(env, 'CORS_ORIGINS')),

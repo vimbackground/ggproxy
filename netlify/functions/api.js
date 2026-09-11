@@ -1,3 +1,4 @@
+// Legacy compatibility shim. Netlify is not a supported deployment target.
 import { handleRequest } from "../../src/handle_request.js";
 
 export default async (req, context) => {

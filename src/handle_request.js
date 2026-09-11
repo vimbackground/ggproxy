@@ -7,6 +7,7 @@ import {
   requestId, withCors,
 } from './security.js';
 import { handleVerification } from './verify_keys.js';
+import { handleAdminRequest } from './admin.js';
 
 export async function handleRequest(request, env = {}) {
   const config = getConfig(env);
@@ -28,18 +29,24 @@ export async function handleRequest(request, env = {}) {
       return withCors(response, request, config, id);
     }
 
-    enforceGatewayAuth(request, config);
-    enforceBodySize(request, config);
+    if (route.kind === 'admin') {
+      response = await handleAdminRequest(request, env, config, route.path);
+      return withCors(response, request, config, id);
+    }
+
+    const gatewayAuth = await enforceGatewayAuth(request, config, env);
+    const upstreamRequest = gatewayAuth.usedAuthorization ? stripGatewayAuthorization(request) : request;
+    enforceBodySize(upstreamRequest, config);
 
     if (route.kind === 'verify') {
       if (!config.verifyEnabled) throw new HttpError('Key verification is disabled', 404, 'not_found');
-      response = await handleVerification(request, config);
+      response = await handleVerification(upstreamRequest, config);
     } else if (route.protocol === 'gemini') {
-      response = await proxyGemini(rewriteRequestPath(request, route.path), config);
+      response = await proxyGemini(rewriteRequestPath(upstreamRequest, route.path), config);
     } else if (route.protocol === 'openai') {
-      response = await openai.fetch(request, { config, endpoint: route.endpoint, path: route.path });
+      response = await openai.fetch(upstreamRequest, { config, endpoint: route.endpoint, path: route.path });
     } else if (route.protocol === 'anthropic') {
-      response = await handleAnthropic(request, { config, endpoint: route.endpoint });
+      response = await handleAnthropic(upstreamRequest, { config, endpoint: route.endpoint });
     } else {
       throw new HttpError('Route not found', 404, 'not_found');
     }
@@ -62,6 +69,7 @@ export function identifyRoute(request) {
   const url = new URL(request.url);
   let path = normalizePath(url.pathname);
   if (path === '/' || path === '/index.html' || path === '/healthz') return { kind: 'home' };
+  if (path === '/admin' || path.startsWith('/admin/api/')) return { kind: 'admin', path };
   if (path === '/verify') return { kind: 'verify', protocol: 'gemini' };
 
   let explicitProtocol = '';
@@ -128,4 +136,10 @@ function rewriteRequestPath(request, path) {
   const url = new URL(request.url);
   url.pathname = path;
   return new Request(url, request);
+}
+
+function stripGatewayAuthorization(request) {
+  const headers = new Headers(request.headers);
+  headers.delete('authorization');
+  return new Request(request, { headers });
 }

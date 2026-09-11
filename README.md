@@ -78,7 +78,7 @@ Claude 模型名同样映射至 `DEFAULT_GEMINI_MODEL`。
 PROXY_TOKEN=随机长令牌
 ```
 
-调用时增加：
+旧版调用可继续增加：
 
 ```http
 x-proxy-token: 随机长令牌
@@ -86,12 +86,18 @@ x-proxy-token: 随机长令牌
 
 这个令牌与 Gemini API Key 分离，防止代理域名被第三方直接滥用。
 
+如需向多个普通用户发放访问权，请配置 `ADMIN_TOKEN` 和管理存储，然后在 `/admin` 创建可单独撤销的客户端令牌。客户端可将该令牌直接填入 OpenAI 的 API Key 字段；网关会用已配置的服务端 Gemini Key 池请求上游，不会把该客户端令牌转发出去。
+
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
 |---|---:|---|
 | `PROXY_TOKEN` | 空 | 可选的网关访问令牌，生产环境强烈建议配置 |
+| `PROXY_TOKENS` | 空 | 可选的静态网关令牌，多个值以英文逗号分隔 |
 | `GEMINI_API_KEYS` | 空 | 服务端 Gemini Key 池，多个 Key 用逗号分隔 |
+| `ADMIN_TOKEN` | 空 | `/admin` 后台登录令牌；配置后才启用后台 |
+| `GGPROXY_ADMIN_KV` | 无 | Cloudflare Workers KV 绑定，用于保存后台创建的客户端令牌哈希 |
+| `ADMIN_KV_REST_URL` / `ADMIN_KV_REST_TOKEN` | 空 | Vercel Edge 等环境使用的 REST KV 地址与写入令牌；也识别标准 Upstash/Vercel KV 变量名 |
 | `DEFAULT_GEMINI_MODEL` | `gemini-2.5-flash` | 非 Gemini 模型名的默认映射目标 |
 | `MAX_BODY_BYTES` | `10485760` | JSON/请求体大小限制 |
 | `UPSTREAM_TIMEOUT_MS` | `120000` | 上游超时 |
@@ -99,6 +105,16 @@ x-proxy-token: 随机长令牌
 | `VERIFY_ENABLED` | `false` | 是否启用 `/verify` |
 
 API Key 来源按顺序包括官方请求头和可选的 `GEMINI_API_KEYS`。为了兼容旧版本，官方 Key 头仍支持逗号分隔多个 Key，但新部署更推荐使用服务端 Key 池。
+
+### 轻量后台
+
+后台刻意只保留三项基础能力：查看是否已配置服务端 Key 池/存储、创建客户端访问令牌、撤销客户端访问令牌。它不记录对话、请求内容、上游 Key 或用量。
+
+1. 设置高强度的 `ADMIN_TOKEN`。
+2. Cloudflare Workers：创建 KV namespace 并以 `GGPROXY_ADMIN_KV` 绑定给 Worker；Vercel Edge：配置兼容 Upstash REST 的 `ADMIN_KV_REST_URL` 和 `ADMIN_KV_REST_TOKEN`。
+3. 打开 `https://你的域名/admin`，输入 `ADMIN_TOKEN`，创建用户令牌。
+
+新令牌只会在创建时显示一次；请保存后再交给用户。若希望用户只需填“中转网址 + 用户令牌”，还必须配置 `GEMINI_API_KEYS`，这样用户令牌不会被当成 Gemini Key 使用。
 
 ## 调用示例
 
@@ -132,19 +148,18 @@ curl "https://proxy.example/v1/messages" \
 
 ## 部署
 
-项目提供四个入口：
+项目的正式部署目标为两个边缘平台：
 
 - Cloudflare Workers：`src/index.js` / `wrangler.toml`
 - Vercel Edge：`api/vercel_index.js` / `vercel.json`
-- Deno Deploy：`src/deno_index.ts`
-- Netlify Functions：`netlify/functions/api.js` / `netlify.toml`
 
-Netlify 已配置 `/*` 到函数入口的全路径重写。
+`src/deno_index.ts` 与 `netlify/functions/api.js` 仅保留为极薄的兼容适配器，方便将来增加正式方案；不再提供 Deno 或 Netlify 的部署配置、测试承诺或操作文档。
 
 详细文档：
 
 - [手动部署操作手册](docs/手动部署操作手册.md)
 - [自动化部署操作指南（连接现有仓库）](docs/一键自动化部署操作指南.md)
+- [Kelivo 用户使用教程（只需中转网址和用户令牌）](docs/Kelivo用户使用教程.md)
 
 ## 本地检查
 

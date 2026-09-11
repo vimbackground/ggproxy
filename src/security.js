@@ -22,15 +22,27 @@ export function requestId(request) {
   return globalThis.crypto?.randomUUID?.() ?? `req_${Date.now().toString(36)}`;
 }
 
-export function enforceGatewayAuth(request, config) {
-  if (!config.proxyToken) return;
-  const actual = request.headers.get('x-proxy-token');
-  if (!actual || !constantTimeEqual(actual, config.proxyToken)) {
-    throw new HttpError('Invalid proxy credentials', 401, 'invalid_proxy_token');
+export async function enforceGatewayAuth(request, config, env) {
+  const proxyHeader = request.headers.get('x-proxy-token');
+  const authorization = request.headers.get('authorization') || '';
+  const bearerToken = /^Bearer\s+(.+)$/i.exec(authorization)?.[1]?.trim() || '';
+  const hasAdminStore = Boolean(env?.GGPROXY_ADMIN_KV || (config.adminStoreUrl && config.adminStoreToken));
+  if (!config.proxyTokens.length && !hasAdminStore) return { usedAuthorization: false };
+  for (const actual of [proxyHeader, bearerToken]) {
+    if (actual && config.proxyTokens.some((token) => constantTimeEqual(actual, token))) {
+      return { usedAuthorization: !proxyHeader && actual === bearerToken };
+    }
   }
+  const { isManagedTokenValid } = await import('./admin.js');
+  for (const actual of [proxyHeader, bearerToken]) {
+    if (await isManagedTokenValid(actual, env, config)) {
+      return { usedAuthorization: !proxyHeader && actual === bearerToken };
+    }
+  }
+  throw new HttpError('Invalid proxy credentials', 401, 'invalid_proxy_token');
 }
 
-function constantTimeEqual(left, right) {
+export function constantTimeEqual(left, right) {
   const a = new TextEncoder().encode(left);
   const b = new TextEncoder().encode(right);
   let mismatch = a.length ^ b.length;

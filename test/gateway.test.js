@@ -59,6 +59,41 @@ describe('gateway security', () => {
     }, { method: 'POST', body: '{}' }), { MAX_BODY_BYTES: '100' });
     assert.equal(response.status, 413);
   });
+
+  it('creates, uses, and revokes a managed client token without exposing its hash', async () => {
+    const data = new Map();
+    const env = {
+      ADMIN_TOKEN: 'admin-secret',
+      GEMINI_API_KEYS: 'server-key',
+      GGPROXY_ADMIN_KV: { get: async (key) => data.get(key) || null, put: async (key, value) => data.set(key, value) },
+    };
+    const unauthorized = await handleRequest(request('/admin/api/overview'), env);
+    assert.equal(unauthorized.status, 401);
+
+    const created = await handleRequest(jsonRequest('/admin/api/tokens', { name: 'Kelivo - Alice' }, {
+      'x-admin-token': 'admin-secret',
+    }), env);
+    assert.equal(created.status, 201);
+    const createdBody = await created.json();
+    assert.match(createdBody.token, /^ggp_[a-f0-9]{48}$/);
+    assert.equal(JSON.stringify(createdBody).includes('hash'), false);
+
+    let upstreamKey;
+    globalThis.fetch = async (_url, init) => {
+      upstreamKey = new Headers(init.headers).get('x-goog-api-key');
+      return new Response('{"models":[]}');
+    };
+    const allowed = await handleRequest(request('/v1/models', { authorization: `Bearer ${createdBody.token}` }), env);
+    assert.equal(allowed.status, 200);
+    assert.equal(upstreamKey, 'server-key');
+
+    const revoked = await handleRequest(request(`/admin/api/tokens/${createdBody.record.id}`, {
+      'x-admin-token': 'admin-secret',
+    }, { method: 'DELETE' }), env);
+    assert.equal(revoked.status, 204);
+    const denied = await handleRequest(request('/v1/models', { authorization: `Bearer ${createdBody.token}` }), env);
+    assert.equal(denied.status, 401);
+  });
 });
 
 describe('protocol adapters', () => {
