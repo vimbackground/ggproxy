@@ -3,3 +3,11 @@ name = "ggproxy"
 main = "src/index.js"
 compatibility_date = "2025-06-17"
 compatibility_flags = ["nodejs_compat"]
+
+# 在 Cloudflare Dashboard 中设置的运行时变量不会被 Git 自动部署删除。
+keep_vars = true
+
+# 后台管理存储。Wrangler 4.45+ 会在首次部署时自动创建并绑定 KV，
+# 之后的部署会继续使用同一绑定，无需将账户专属的 namespace ID 提交到仓库。
+[[kv_namespaces]]
+binding = "GGPROXY_ADMIN_KV"
