@@ -86,7 +86,7 @@ x-proxy-token: 随机长令牌
 
 这个令牌与 Gemini API Key 分离，防止代理域名被第三方直接滥用。
 
-如需向多个普通用户发放访问权，请配置 `ADMIN_TOKEN` 和管理存储，然后在 `/admin` 创建可单独撤销的客户端令牌。客户端可将该令牌直接填入 OpenAI 的 API Key 字段；网关会用已配置的服务端 Gemini Key 池请求上游，不会把该客户端令牌转发出去。
+如需向多个普通用户发放访问权，请配置 `ADMIN_TOKEN`、`ADMIN_ENCRYPTION_KEY` 和管理存储，然后在 `/admin` 添加服务端 Gemini Key、选择随机/轮询策略、限制可用模型，并创建可单独撤销的客户端令牌。客户端可将该令牌直接填入 OpenAI 的 API Key 字段；网关会使用后台 Key 池请求上游，不会把客户端令牌转发出去。
 
 ## 环境变量
 
@@ -96,9 +96,10 @@ x-proxy-token: 随机长令牌
 | `PROXY_TOKENS` | 空 | 可选的静态网关令牌，多个值以英文逗号分隔 |
 | `GEMINI_API_KEYS` | 空 | 服务端 Gemini Key 池，多个 Key 用逗号分隔 |
 | `ADMIN_TOKEN` | 空 | `/admin` 后台登录令牌；配置后才启用后台 |
-| `GGPROXY_ADMIN_KV` | 无 | Cloudflare Workers KV 绑定，用于保存后台创建的客户端令牌哈希 |
+| `ADMIN_ENCRYPTION_KEY` | 空 | 至少 32 位；用于加密后台保存的 Gemini Key，启用后台 Key 池时必需 |
+| `GGPROXY_ADMIN_KV` | 无 | Cloudflare Workers KV 绑定，用于保存后台令牌、加密后的 Key 和中转策略 |
 | `ADMIN_KV_REST_URL` / `ADMIN_KV_REST_TOKEN` | 空 | Vercel Edge 等环境使用的 REST KV 地址与写入令牌；也识别标准 Upstash/Vercel KV 变量名 |
-| `DEFAULT_GEMINI_MODEL` | `gemini-2.5-flash` | 非 Gemini 模型名的默认映射目标 |
+| `DEFAULT_GEMINI_MODEL` | `gemini-3.5-flash-lite` | 非 Gemini 模型名的默认映射目标 |
 | `MAX_BODY_BYTES` | `10485760` | JSON/请求体大小限制 |
 | `UPSTREAM_TIMEOUT_MS` | `120000` | 上游超时 |
 | `CORS_ORIGINS` | 空 | 允许的 Origin，逗号分隔；`*` 表示全部 |
@@ -106,22 +107,31 @@ x-proxy-token: 随机长令牌
 
 API Key 来源按顺序包括官方请求头和可选的 `GEMINI_API_KEYS`。为了兼容旧版本，官方 Key 头仍支持逗号分隔多个 Key，但新部署更推荐使用服务端 Key 池。
 
-### 轻量后台
+### 后台服务端 Key 池
 
-后台刻意只保留三项基础能力：查看是否已配置服务端 Key 池/存储、创建客户端访问令牌、撤销客户端访问令牌。它不记录对话、请求内容、上游 Key 或用量。
+后台提供服务端 Gemini Key 的添加、启用/停用、删除，以及随机/轮询策略、允许模型列表和客户端访问令牌的创建/撤销。Key 以 AES-GCM 加密后写入管理存储，管理页面不会再次显示明文。它不提供用户账户、余额、计费、用量或请求日志。
 
-1. 设置高强度的 `ADMIN_TOKEN`。
+1. 设置高强度的 `ADMIN_TOKEN` 和至少 32 位的 `ADMIN_ENCRYPTION_KEY`。
 2. Cloudflare Workers：创建 KV namespace 并以 `GGPROXY_ADMIN_KV` 绑定给 Worker；Vercel Edge：配置兼容 Upstash REST 的 `ADMIN_KV_REST_URL` 和 `ADMIN_KV_REST_TOKEN`。
-3. 打开 `https://你的域名/admin`，输入 `ADMIN_TOKEN`，创建用户令牌。
+3. 打开 `https://你的域名/admin`，输入 `ADMIN_TOKEN`，先添加服务端 Gemini Key 和中转策略，再创建用户令牌。
 
-新令牌只会在创建时显示一次；请保存后再交给用户。若希望用户只需填“中转网址 + 用户令牌”，还必须配置 `GEMINI_API_KEYS`，这样用户令牌不会被当成 Gemini Key 使用。
+新令牌只会在创建时显示一次；请保存后再交给用户。原有 `GEMINI_API_KEYS` 环境变量仍保留为兼容回退方案。
+
+### 两种使用模式
+
+| 模式 | 地址 | 客户端填写的 API Key | 用途 |
+|---|---|---|---|
+| 本站中转 | `https://你的域名/v1` | 后台创建的 `ggp_...` 客户端令牌 | 使用后台服务端 Key 池、策略和模型白名单 |
+| BYOK | `https://你的域名/byok/v1` | 用户自己的 Gemini API Key | 明确使用用户自己的 Key；不使用后台 Key 池和模型白名单 |
+
+BYOK 的 Gemini 原生路径同理为 `/byok/v1beta/...`；OpenAI、Gemini 与 Claude 的原有协议识别规则保持不变。
 
 ## 调用示例
 
 ### Gemini
 
 ```bash
-curl "https://proxy.example/v1beta/models/gemini-2.5-flash:generateContent" \
+curl "https://proxy.example/v1beta/models/gemini-3.5-flash-lite:generateContent" \
   -H "x-goog-api-key: $GEMINI_API_KEY" \
   -H "content-type: application/json" \
   -d '{"contents":[{"parts":[{"text":"Hello"}]}]}'
@@ -133,7 +143,7 @@ curl "https://proxy.example/v1beta/models/gemini-2.5-flash:generateContent" \
 curl "https://proxy.example/v1/chat/completions" \
   -H "Authorization: Bearer $GEMINI_API_KEY" \
   -H "content-type: application/json" \
-  -d '{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"Hello"}]}'
+  -d '{"model":"gemini-3.5-flash-lite","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
 ### Claude

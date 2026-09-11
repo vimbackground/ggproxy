@@ -6,6 +6,7 @@
 import {
   HttpError, copyRequestHeaders, copyResponseHeaders, fetchWithTimeout, readJsonLimited, selectApiKey,
 } from "./security.js";
+import { assertModelAllowed, filterAllowedModels } from './model_policy.js';
 
 export default {
   async fetch (request, { config, endpoint, path }) {
@@ -41,6 +42,7 @@ export default {
           return handleModels(apiKey, config, request.signal)
             .catch(errHandler);
         case "passthrough":
+          if (config.allowedModels?.length) throw new HttpError('This endpoint is disabled while a model policy is active', 403, 'model_policy_required');
           return proxyOfficialOpenAI(request, apiKey, config, path)
             .catch(errHandler);
         default:
@@ -87,7 +89,7 @@ async function handleModels (apiKey, config, signal) {
     const { models } = JSON.parse(await response.text());
     body = JSON.stringify({
       object: "list",
-      data: models.map(({ name }) => ({
+      data: filterAllowedModels(models, config).map(({ name }) => ({
         id: name.replace("models/", ""),
         object: "model",
         created: 0,
@@ -117,6 +119,7 @@ async function handleEmbeddings (req, apiKey, config, signal) {
   if (!Array.isArray(req.input)) {
     req.input = [ req.input ];
   }
+  assertModelAllowed(req.model.replace(/^models\//, ''), config);
   const response = await fetchWithTimeout(`${BASE_URL}/${API_VERSION}/${model}:batchEmbedContents`, {
     method: "POST",
     headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
@@ -161,6 +164,7 @@ async function handleCompletions (req, apiKey, config, signal) {
     case req.model.startsWith("learnlm-"):
       model = req.model;
   }
+  assertModelAllowed(model, config);
   let body = await transformRequest(req);
   const extra = req.extra_body?.google
   if (extra) {

@@ -33,7 +33,7 @@ function list(input) {
 export function getConfig(env = {}) {
   return {
     geminiApiKeys: list(value(env, 'GEMINI_API_KEYS')),
-    defaultGeminiModel: value(env, 'DEFAULT_GEMINI_MODEL') || 'gemini-2.5-flash',
+    defaultGeminiModel: value(env, 'DEFAULT_GEMINI_MODEL') || 'gemini-3.5-flash-lite',
     // PROXY_TOKEN remains supported for existing deployments. PROXY_TOKENS is
     // useful when a small number of static client credentials is sufficient.
     proxyTokens: [...new Set([
@@ -41,6 +41,7 @@ export function getConfig(env = {}) {
       ...list(value(env, 'PROXY_TOKENS')),
     ])],
     adminToken: value(env, 'ADMIN_TOKEN') || '',
+    adminEncryptionKey: value(env, 'ADMIN_ENCRYPTION_KEY') || '',
     adminStoreUrl: value(env, 'ADMIN_KV_REST_URL')
       || value(env, 'UPSTASH_REDIS_REST_URL')
       || value(env, 'KV_REST_API_URL')

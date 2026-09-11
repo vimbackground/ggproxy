@@ -1,12 +1,15 @@
 import {
   copyRequestHeaders, copyResponseHeaders, fetchWithTimeout, selectApiKey,
 } from './security.js';
+import { assertModelAllowed, filterAllowedModels } from './model_policy.js';
 
 export const GEMINI_ORIGIN = 'https://generativelanguage.googleapis.com';
 
 export async function proxyGemini(request, config) {
   const incoming = new URL(request.url);
   const target = new URL(incoming.pathname + incoming.search, GEMINI_ORIGIN);
+  const model = incoming.pathname.match(/\/models\/([^/:]+)/)?.[1];
+  if (model) assertModelAllowed(decodeURIComponent(model), config);
   const key = selectApiKey(request, config, 'gemini');
   target.searchParams.delete('key');
 
@@ -21,6 +24,12 @@ export async function proxyGemini(request, config) {
     redirect: 'manual',
   }, config.upstreamTimeoutMs);
 
+  if (/^\/(v1|v1beta)\/models$/.test(incoming.pathname) && config.allowedModels?.length && response.ok) {
+    const payload = await response.json();
+    return new Response(JSON.stringify({ ...payload, models: filterAllowedModels(payload.models || [], config) }), {
+      status: response.status, statusText: response.statusText, headers: copyResponseHeaders(response.headers),
+    });
+  }
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

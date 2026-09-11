@@ -94,6 +94,49 @@ describe('gateway security', () => {
     const denied = await handleRequest(request('/v1/models', { authorization: `Bearer ${createdBody.token}` }), env);
     assert.equal(denied.status, 401);
   });
+
+  it('uses encrypted managed key pools, applies model policy, and keeps BYOK explicit', async () => {
+    const data = new Map();
+    const env = {
+      ADMIN_TOKEN: 'admin-secret',
+      ADMIN_ENCRYPTION_KEY: 'a-long-random-encryption-secret-at-least-32',
+      GGPROXY_ADMIN_KV: { get: async (key) => data.get(key) || null, put: async (key, value) => data.set(key, value) },
+    };
+    const admin = { 'x-admin-token': 'admin-secret', 'content-type': 'application/json' };
+    for (const [name, apiKey] of [['primary', 'gemini-key-primary'], ['secondary', 'gemini-key-secondary']]) {
+      const response = await handleRequest(jsonRequest('/admin/api/upstream-keys', { name, apiKey }, admin), env);
+      assert.equal(response.status, 201);
+      assert.equal(JSON.stringify(await response.json()).includes(apiKey), false);
+    }
+    const policy = await handleRequest(request('/admin/api/policy', admin, {
+      method: 'PUT', body: JSON.stringify({ strategy: 'round_robin', allowedModels: ['gemini-3.5-flash-lite'] }),
+    }), env);
+    assert.equal(policy.status, 200);
+    const tokenResponse = await handleRequest(jsonRequest('/admin/api/tokens', { name: 'managed user' }, admin), env);
+    const { token } = await tokenResponse.json();
+
+    const keys = [];
+    globalThis.fetch = async (_url, init) => {
+      keys.push(new Headers(init.headers).get('x-goog-api-key'));
+      return geminiCompletion('ok');
+    };
+    for (let count = 0; count < 2; count += 1) {
+      const response = await handleRequest(jsonRequest('/v1/chat/completions', {
+        model: 'gemini-3.5-flash-lite', messages: [{ role: 'user', content: 'hello' }],
+      }, { authorization: `Bearer ${token}` }), env);
+      assert.equal(response.status, 200);
+    }
+    assert.deepEqual(keys, ['gemini-key-primary', 'gemini-key-secondary']);
+
+    const disabled = await handleRequest(jsonRequest('/v1/chat/completions', {
+      model: 'gemini-not-enabled', messages: [{ role: 'user', content: 'hello' }],
+    }, { authorization: `Bearer ${token}` }), env);
+    assert.equal(disabled.status, 403);
+
+    const byok = await handleRequest(request('/byok/v1beta/models', { 'x-goog-api-key': 'my-own-gemini-key' }), env);
+    assert.equal(byok.status, 200);
+    assert.equal(keys.at(-1), 'my-own-gemini-key');
+  });
 });
 
 describe('protocol adapters', () => {

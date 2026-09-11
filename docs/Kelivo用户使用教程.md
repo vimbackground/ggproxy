@@ -25,6 +25,17 @@
 
 Kelivo 的官方指南也建议 OpenAI 兼容服务的 Base URL 通常以 `/v1` 结尾，填完 Key 后使用“获取模型”；默认请求路径应保持 `/chat/completions`。[查看 Kelivo 使用手册](https://kelivo.psycheas.top/guide)
 
+## 使用自己的 Gemini Key（BYOK）
+
+这是与本站中转令牌明确分开的高级模式。管理员允许你使用时，类型仍选 OpenAI / OpenAI 兼容，但改为：
+
+| 字段 | 填写内容 |
+|---|---|
+| Base URL / API 主机 | 中转网址加 `/byok/v1`，例如 `https://proxy.example/byok/v1` |
+| API Key | 你自己的 Gemini API Key |
+
+BYOK 不使用管理员后台的 Key 池，也不占用后台客户端令牌。不要把本站客户端令牌填进 BYOK 配置。
+
 ## 常见问题
 
 ### 获取模型或聊天时提示 401

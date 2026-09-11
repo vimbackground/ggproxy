@@ -27,16 +27,18 @@ export async function enforceGatewayAuth(request, config, env) {
   const authorization = request.headers.get('authorization') || '';
   const bearerToken = /^Bearer\s+(.+)$/i.exec(authorization)?.[1]?.trim() || '';
   const hasAdminStore = Boolean(env?.GGPROXY_ADMIN_KV || (config.adminStoreUrl && config.adminStoreToken));
-  if (!config.proxyTokens.length && !hasAdminStore) return { usedAuthorization: false };
+  if (!config.proxyTokens.length && !hasAdminStore) return { usedAuthorization: false, useManagedPool: false };
   for (const actual of [proxyHeader, bearerToken]) {
     if (actual && config.proxyTokens.some((token) => constantTimeEqual(actual, token))) {
-      return { usedAuthorization: !proxyHeader && actual === bearerToken };
+      const usedAuthorization = !proxyHeader && actual === bearerToken;
+      return { usedAuthorization, useManagedPool: usedAuthorization };
     }
   }
   const { isManagedTokenValid } = await import('./admin.js');
   for (const actual of [proxyHeader, bearerToken]) {
     if (await isManagedTokenValid(actual, env, config)) {
-      return { usedAuthorization: !proxyHeader && actual === bearerToken };
+      const usedAuthorization = !proxyHeader && actual === bearerToken;
+      return { usedAuthorization, useManagedPool: usedAuthorization };
     }
   }
   throw new HttpError('Invalid proxy credentials', 401, 'invalid_proxy_token');

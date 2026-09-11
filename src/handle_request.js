@@ -8,6 +8,7 @@ import {
 } from './security.js';
 import { handleVerification } from './verify_keys.js';
 import { handleAdminRequest } from './admin.js';
+import { resolveManagedGatewayConfig } from './admin.js';
 
 export async function handleRequest(request, env = {}) {
   const config = getConfig(env);
@@ -34,19 +35,22 @@ export async function handleRequest(request, env = {}) {
       return withCors(response, request, config, id);
     }
 
-    const gatewayAuth = await enforceGatewayAuth(request, config, env);
+    const gatewayAuth = route.authMode === 'byok'
+      ? { usedAuthorization: false, useManagedPool: false }
+      : await enforceGatewayAuth(request, config, env);
     const upstreamRequest = gatewayAuth.usedAuthorization ? stripGatewayAuthorization(request) : request;
+    const activeConfig = gatewayAuth.useManagedPool ? await resolveManagedGatewayConfig(env, config) : config;
     enforceBodySize(upstreamRequest, config);
 
     if (route.kind === 'verify') {
-      if (!config.verifyEnabled) throw new HttpError('Key verification is disabled', 404, 'not_found');
-      response = await handleVerification(upstreamRequest, config);
+      if (!activeConfig.verifyEnabled) throw new HttpError('Key verification is disabled', 404, 'not_found');
+      response = await handleVerification(upstreamRequest, activeConfig);
     } else if (route.protocol === 'gemini') {
-      response = await proxyGemini(rewriteRequestPath(upstreamRequest, route.path), config);
+      response = await proxyGemini(rewriteRequestPath(upstreamRequest, route.path), activeConfig);
     } else if (route.protocol === 'openai') {
-      response = await openai.fetch(upstreamRequest, { config, endpoint: route.endpoint, path: route.path });
+      response = await openai.fetch(upstreamRequest, { config: activeConfig, endpoint: route.endpoint, path: route.path });
     } else if (route.protocol === 'anthropic') {
-      response = await handleAnthropic(upstreamRequest, { config, endpoint: route.endpoint });
+      response = await handleAnthropic(upstreamRequest, { config: activeConfig, endpoint: route.endpoint });
     } else {
       throw new HttpError('Route not found', 404, 'not_found');
     }
@@ -67,11 +71,19 @@ export async function handleRequest(request, env = {}) {
 
 export function identifyRoute(request) {
   const url = new URL(request.url);
-  let path = normalizePath(url.pathname);
+  const path = normalizePath(url.pathname);
   if (path === '/' || path === '/index.html' || path === '/healthz') return { kind: 'home' };
   if (path === '/admin' || path.startsWith('/admin/api/')) return { kind: 'admin', path };
   if (path === '/verify') return { kind: 'verify', protocol: 'gemini' };
+  if (path === '/byok' || path.startsWith('/byok/')) {
+    const route = identifyApiRoute(path.slice('/byok'.length) || '/', request);
+    return { ...route, authMode: 'byok' };
+  }
+  return identifyApiRoute(path, request);
+}
 
+function identifyApiRoute(initialPath, request) {
+  let path = initialPath;
   let explicitProtocol = '';
   for (const [prefix, protocol] of [['/gemini', 'gemini'], ['/openai', 'openai'], ['/anthropic', 'anthropic']]) {
     if (path === prefix || path.startsWith(`${prefix}/`)) {

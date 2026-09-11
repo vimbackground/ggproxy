@@ -1,5 +1,6 @@
 import { callGemini } from './gemini.js';
 import { HttpError, readJsonLimited, selectApiKey } from './security.js';
+import { assertModelAllowed } from './model_policy.js';
 
 export async function handleAnthropic(request, { config, endpoint }) {
   if (request.method !== 'POST') {
@@ -24,6 +25,7 @@ async function createMessage(req, apiKey, config, signal) {
     throw new HttpError('max_tokens must be a positive integer', 400, 'invalid_request_error');
   }
   const model = mapModel(req.model, config);
+  assertModelAllowed(model, config);
   const body = toGeminiRequest(req);
   const task = req.stream ? 'streamGenerateContent?alt=sse' : 'generateContent';
   const response = await callGemini(`/v1beta/models/${encodeURIComponent(model)}:${task}`, {
@@ -51,6 +53,7 @@ async function createMessage(req, apiKey, config, signal) {
 
 async function countTokens(req, apiKey, config, signal) {
   const model = mapModel(req.model, config);
+  assertModelAllowed(model, config);
   const body = toGeminiRequest({ ...req, max_tokens: req.max_tokens || 1 });
   const response = await callGemini(`/v1beta/models/${encodeURIComponent(model)}:countTokens`, {
     apiKey, body: { contents: body.contents, systemInstruction: body.systemInstruction, tools: body.tools }, config, signal,
