@@ -32,6 +32,15 @@ describe('route identification', () => {
 });
 
 describe('gateway security', () => {
+  it('renders an executable admin page script', async () => {
+    const response = await handleRequest(request('/admin'), { ADMIN_TOKEN: 'admin-secret' });
+    const html = await response.text();
+    const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
+    assert.equal(response.status, 200);
+    assert.ok(script);
+    assert.doesNotThrow(() => new Function(script));
+  });
+
   it('keeps health public but protects API routes when configured', async () => {
     assert.equal((await handleRequest(request('/healthz'), { PROXY_TOKEN: 'secret' })).status, 200);
     const response = await handleRequest(request('/v1/models', { authorization: 'Bearer key' }), { PROXY_TOKEN: 'secret' });

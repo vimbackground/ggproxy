@@ -197,5 +197,66 @@ function json(body, status = 200) { return new Response(JSON.stringify(body), { 
 function htmlResponse(body) { return new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'" } }); }
 
 function adminPage() {
-  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ggproxy 管理</title><style>body{max-width:860px;margin:32px auto;padding:0 18px;font:15px/1.5 system-ui,sans-serif;color:#172033;background:#f7f8fa}main{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:28px}h1{margin-top:0}h2{margin-top:28px}input,select,textarea,button{font:inherit;padding:9px;border:1px solid #cbd5e1;border-radius:7px}textarea{width:100%;min-height:64px;box-sizing:border-box}button{background:#0f766e;color:#fff;cursor:pointer}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.hidden{display:none}.notice{background:#ecfeff;padding:10px;border-radius:7px;word-break:break-all}.warn{background:#fff7ed;padding:10px;border-radius:7px}li{margin:8px 0}small{color:#64748b}</style><main><h1>ggproxy 管理</h1><section id="login"><p>输入部署时设置的 <code>ADMIN_TOKEN</code>。</p><div class="row"><input id="adminToken" type="password" placeholder="ADMIN_TOKEN"><button id="loginButton">进入</button></div><p id="loginError"></p></section><section id="panel" class="hidden"><div class="row"><strong>运行状态</strong><button id="refresh">刷新</button><button id="logout">退出</button></div><p id="overview"></p><p id="setup" class="warn hidden"></p><hr><h2>服务端 Gemini Key 池</h2><p><small>Key 会用 <code>ADMIN_ENCRYPTION_KEY</code> 加密后存储；明文不会再次显示。</small></p><div class="row"><input id="keyName" maxlength="64" placeholder="例如：主账号"><input id="upstreamKey" type="password" placeholder="Gemini API Key"><button id="addKey">添加 Key</button></div><ul id="upstreamKeys"></ul><h2>中转策略与模型</h2><div class="row"><label>策略 <select id="strategy"><option value="random">随机</option><option value="round_robin">轮询</option></select></label><button id="savePolicy">保存策略</button></div><p><small>每行一个允许中转的 Gemini 模型；留空表示不限制模型。</small></p><textarea id="allowedModels" placeholder="gemini-3.5-flash-lite"></textarea><h2>客户端访问令牌</h2><p><small>用户将中转网址加 <code>/v1</code> 和该令牌填入 OpenAI 兼容客户端。新令牌只显示一次。</small></p><div class="row"><input id="tokenName" maxlength="64" placeholder="例如：Kelivo - 张三"><button id="create">创建令牌</button></div><p id="created" class="notice hidden"></p><ul id="tokens"></ul></section></main><script>let adminToken='';const $=id=>document.getElementById(id);async function api(path,o={}){const headers={...o.headers,'x-admin-token':adminToken};const r=await fetch(path,{...o,headers});if(!r.ok){const b=await r.json().catch(()=>({}));throw Error(b.error?.message||b.error?.error?.message||'请求失败')}return r.status===204?null:r.json()}function esc(s){const e=document.createElement('span');e.textContent=s;return e.innerHTML}async function load(){const[o,ks,p,t]=await Promise.all([api('/admin/api/overview'),api('/admin/api/upstream-keys'),api('/admin/api/policy'),api('/admin/api/tokens')]);$('overview').textContent='存储：'+(o.storage.enabled?o.storage.type:'未配置')+'；客户端令牌：'+o.clientTokenCount+'；启用 Key：'+o.activeUpstreamKeyCount+'；默认模型：'+o.defaultGeminiModel;$('setup').textContent=!o.encryptionConfigured?'需要先在平台设置至少 32 位的 ADMIN_ENCRYPTION_KEY，才能保存服务端 Gemini Key。':'';$('setup').classList.toggle('hidden',o.encryptionConfigured);$('upstreamKeys').innerHTML=ks.keys.map(x=>'<li><strong>'+esc(x.name)+'</strong> <small>'+(x.enabled?'已启用':'已停用')+'</small> <button data-toggle="'+x.id+'" data-enabled="'+x.enabled+'">'+(x.enabled?'停用':'启用')+'</button> <button data-delete-key="'+x.id+'">删除</button></li>').join('')||'<li>尚无后台 Key。</li>';$('strategy').value=p.policy.strategy;$('allowedModels').value=p.policy.allowedModels.join('\n');$('tokens').innerHTML=t.tokens.map(x=>'<li><strong>'+esc(x.name)+'</strong> <small>'+esc(x.createdAt)+'</small> <button data-delete-token="'+x.id+'">撤销</button></li>').join('')||'<li>尚无客户端令牌。</li>';document.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=async()=>{await api('/admin/api/upstream-keys/'+b.dataset.toggle,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:b.dataset.enabled!=='true'})});load()});document.querySelectorAll('[data-delete-key]').forEach(b=>b.onclick=async()=>{if(confirm('删除此服务端 Key？')){await api('/admin/api/upstream-keys/'+b.dataset.deleteKey,{method:'DELETE'});load()}});document.querySelectorAll('[data-delete-token]').forEach(b=>b.onclick=async()=>{if(confirm('撤销此客户端令牌？')){await api('/admin/api/tokens/'+b.dataset.deleteToken,{method:'DELETE'});load()}})}$('loginButton').onclick=async()=>{adminToken=$('adminToken').value;try{await load();$('login').classList.add('hidden');$('panel').classList.remove('hidden')}catch(e){$('loginError').textContent=e.message}};$('refresh').onclick=load;$('logout').onclick=()=>location.reload();$('addKey').onclick=async()=>{try{await api('/admin/api/upstream-keys',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:$('keyName').value,apiKey:$('upstreamKey').value})});$('keyName').value='';$('upstreamKey').value='';load()}catch(e){alert(e.message)}};$('savePolicy').onclick=async()=>{try{await api('/admin/api/policy',{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({strategy:$('strategy').value,allowedModels:$('allowedModels').value.split(/\\r?\\n/)})});load()}catch(e){alert(e.message)}};$('create').onclick=async()=>{try{const r=await api('/admin/api/tokens',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:$('tokenName').value})});$('created').textContent='请立即复制并安全发送：'+r.token;$('created').classList.remove('hidden');$('tokenName').value='';load()}catch(e){alert(e.message)}};</script></html>`;
+  return `<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ggproxy 管理</title>
+<style>
+body{max-width:860px;margin:32px auto;padding:0 18px;font:15px/1.5 system-ui,sans-serif;color:#172033;background:#f7f8fa}main{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:28px}h1{margin-top:0}h2{margin-top:28px}input,select,textarea,button{font:inherit;padding:9px;border:1px solid #cbd5e1;border-radius:7px}textarea{width:100%;min-height:70px;box-sizing:border-box}button{background:#0f766e;color:#fff;cursor:pointer}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.hidden{display:none}.notice{background:#ecfeff;padding:10px;border-radius:7px;word-break:break-all}.warn{background:#fff7ed;padding:10px;border-radius:7px}li{margin:8px 0}small{color:#64748b}
+</style>
+<main><h1>ggproxy 管理</h1>
+<section id="login"><p>输入部署时设置的 <code>ADMIN_TOKEN</code>。</p><div class="row"><input id="adminToken" type="password" placeholder="ADMIN_TOKEN"><button id="loginButton">进入</button></div><p id="loginError"></p></section>
+<section id="panel" class="hidden"><div class="row"><strong>运行状态</strong><button id="refresh">刷新</button><button id="logout">退出</button></div><p id="overview"></p><p id="setup" class="warn hidden"></p><hr>
+<h2>服务端 Gemini Key 池</h2><p><small>Key 会用 <code>ADMIN_ENCRYPTION_KEY</code> 加密后存储；明文不会再次显示。</small></p><div class="row"><input id="keyName" maxlength="64" placeholder="例如：主账号"><input id="upstreamKey" type="password" placeholder="Gemini API Key"><button id="addKey">添加 Key</button></div><ul id="upstreamKeys"></ul>
+<h2>中转策略与模型</h2><div class="row"><label>策略 <select id="strategy"><option value="random">随机</option><option value="round_robin">轮询</option></select></label><button id="savePolicy">保存策略</button></div><p><small>每行一个允许中转的 Gemini 模型；留空表示不限制模型。</small></p><textarea id="allowedModels" placeholder="gemini-3.5-flash-lite"></textarea>
+<h2>客户端访问令牌</h2><p><small>用户将中转网址加 <code>/v1</code> 和该令牌填入 OpenAI 兼容客户端。新令牌只显示一次。</small></p><div class="row"><input id="tokenName" maxlength="64" placeholder="例如：Kelivo - 张三"><button id="createToken">创建令牌</button></div><p id="created" class="notice hidden"></p><ul id="tokens"></ul>
+</section></main>
+<script>
+let adminToken = '';
+const el = (id) => document.getElementById(id);
+async function api(path, options = {}) {
+  const response = await fetch(path, { ...options, headers: { ...options.headers, 'x-admin-token': adminToken } });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw Error(body.error?.message || body.error?.error?.message || '请求失败');
+  }
+  return response.status === 204 ? null : response.json();
+}
+function listItem(text, buttons) {
+  const item = document.createElement('li');
+  const label = document.createElement('strong');
+  label.textContent = text;
+  item.append(label, document.createTextNode(' '));
+  buttons.forEach((button) => item.append(button));
+  return item;
+}
+function button(text, action) {
+  const result = document.createElement('button');
+  result.textContent = text;
+  result.onclick = action;
+  return result;
+}
+async function load() {
+  const overview = await api('/admin/api/overview');
+  el('overview').textContent = '存储：' + (overview.storage.enabled ? overview.storage.type : '未配置') + '；客户端令牌：' + overview.clientTokenCount + '；启用 Key：' + overview.activeUpstreamKeyCount + '；默认模型：' + overview.defaultGeminiModel;
+  el('setup').textContent = !overview.storage.enabled ? '请先配置管理存储，才能使用后台管理功能。' : (!overview.encryptionConfigured ? '需要先在平台设置至少 32 位的 ADMIN_ENCRYPTION_KEY，才能保存服务端 Gemini Key。' : '');
+  el('setup').classList.toggle('hidden', overview.storage.enabled && overview.encryptionConfigured);
+  if (!overview.storage.enabled) return;
+  const results = await Promise.all([api('/admin/api/upstream-keys'), api('/admin/api/policy'), api('/admin/api/tokens')]);
+  const keys = results[0].keys, policy = results[1].policy, tokens = results[2].tokens;
+  const keyList = el('upstreamKeys'); keyList.replaceChildren();
+  keys.forEach((key) => keyList.append(listItem(key.name + '（' + (key.enabled ? '已启用' : '已停用') + '）', [button(key.enabled ? '停用' : '启用', async () => { await api('/admin/api/upstream-keys/' + key.id, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: !key.enabled }) }); load(); }), button('删除', async () => { if (confirm('删除此服务端 Key？')) { await api('/admin/api/upstream-keys/' + key.id, { method: 'DELETE' }); load(); } })])));
+  if (!keys.length) keyList.textContent = '尚无后台 Key。';
+  el('strategy').value = policy.strategy;
+  el('allowedModels').value = policy.allowedModels.join(String.fromCharCode(10));
+  const tokenList = el('tokens'); tokenList.replaceChildren();
+  tokens.forEach((token) => tokenList.append(listItem(token.name + '（' + token.createdAt + '）', [button('撤销', async () => { if (confirm('撤销此客户端令牌？')) { await api('/admin/api/tokens/' + token.id, { method: 'DELETE' }); load(); } })])));
+  if (!tokens.length) tokenList.textContent = '尚无客户端令牌。';
+}
+el('loginButton').onclick = async () => { adminToken = el('adminToken').value; try { await load(); el('login').classList.add('hidden'); el('panel').classList.remove('hidden'); } catch (error) { el('loginError').textContent = error.message; } };
+el('refresh').onclick = load;
+el('logout').onclick = () => location.reload();
+el('addKey').onclick = async () => { try { await api('/admin/api/upstream-keys', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: el('keyName').value, apiKey: el('upstreamKey').value }) }); el('keyName').value = ''; el('upstreamKey').value = ''; load(); } catch (error) { alert(error.message); } };
+el('savePolicy').onclick = async () => { try { await api('/admin/api/policy', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ strategy: el('strategy').value, allowedModels: el('allowedModels').value.split(String.fromCharCode(10)) }) }); load(); } catch (error) { alert(error.message); } };
+el('createToken').onclick = async () => { try { const result = await api('/admin/api/tokens', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: el('tokenName').value }) }); el('created').textContent = '请立即复制并安全发送：' + result.token; el('created').classList.remove('hidden'); el('tokenName').value = ''; load(); } catch (error) { alert(error.message); } };
+</script></html>`;
 }
