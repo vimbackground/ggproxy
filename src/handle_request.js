@@ -36,9 +36,12 @@ export async function handleRequest(request, env = {}) {
     }
 
     const gatewayAuth = route.authMode === 'byok'
-      ? { usedAuthorization: false, useManagedPool: false }
+      ? { credentialSource: '', useManagedPool: false, isManagedToken: false }
       : await enforceGatewayAuth(request, config, env);
-    const upstreamRequest = gatewayAuth.usedAuthorization ? stripGatewayAuthorization(request) : request;
+    if (gatewayAuth.isManagedToken && route.protocol !== 'gemini') {
+      throw new HttpError('Managed client tokens must use the Gemini-native URL path', 400, 'managed_token_requires_gemini_path');
+    }
+    const upstreamRequest = stripGatewayCredential(request, gatewayAuth.credentialSource);
     const activeConfig = gatewayAuth.useManagedPool ? await resolveManagedGatewayConfig(env, config) : config;
     enforceBodySize(upstreamRequest, config);
 
@@ -85,7 +88,7 @@ export function identifyRoute(request) {
 function identifyApiRoute(initialPath, request) {
   let path = initialPath;
   let explicitProtocol = '';
-  for (const [prefix, protocol] of [['/gemini', 'gemini'], ['/openai', 'openai'], ['/anthropic', 'anthropic']]) {
+  for (const [prefix, protocol] of [['/gemini', 'gemini'], ['/openai', 'openai'], ['/claude', 'anthropic'], ['/anthropic', 'anthropic']]) {
     if (path === prefix || path.startsWith(`${prefix}/`)) {
       explicitProtocol = protocol;
       path = path.slice(prefix.length) || '/';
@@ -95,9 +98,9 @@ function identifyApiRoute(initialPath, request) {
 
   const openaiEndpoint = matchOpenAI(path);
   const anthropicEndpoint = matchAnthropic(path);
-  if (explicitProtocol === 'openai') return { protocol: 'openai', endpoint: openaiEndpoint || 'passthrough', path };
-  if (explicitProtocol === 'anthropic') return { protocol: 'anthropic', endpoint: anthropicEndpoint };
-  if (explicitProtocol === 'gemini') return { protocol: 'gemini', path };
+  if (explicitProtocol === 'openai') return { protocol: 'openai', endpoint: openaiEndpoint || 'passthrough', path, authMode: 'byok' };
+  if (explicitProtocol === 'anthropic') return { protocol: 'anthropic', endpoint: anthropicEndpoint, authMode: 'byok' };
+  if (explicitProtocol === 'gemini') return { protocol: 'gemini', path, authMode: 'byok' };
 
   if (anthropicEndpoint) return { protocol: 'anthropic', endpoint: anthropicEndpoint };
   if (openaiEndpoint && isOpenAIRoute(path, request)) {
@@ -150,8 +153,12 @@ function rewriteRequestPath(request, path) {
   return new Request(url, request);
 }
 
-function stripGatewayAuthorization(request) {
+function stripGatewayCredential(request, source) {
+  if (!source) return request;
   const headers = new Headers(request.headers);
-  headers.delete('authorization');
-  return new Request(request, { headers });
+  const url = new URL(request.url);
+  if (source === 'authorization') headers.delete('authorization');
+  if (source === 'gemini_header') headers.delete('x-goog-api-key');
+  if (source === 'query') url.searchParams.delete('key');
+  return new Request(url, new Request(request, { headers }));
 }

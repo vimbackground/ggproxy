@@ -208,7 +208,7 @@ body{max-width:860px;margin:32px auto;padding:0 18px;font:15px/1.5 system-ui,san
 <section id="panel" class="hidden"><div class="row"><strong>运行状态</strong><button id="refresh">刷新</button><button id="logout">退出</button></div><p id="overview"></p><p id="setup" class="warn hidden"></p><hr>
 <h2>服务端 Gemini Key 池</h2><p><small>Key 会用 <code>ADMIN_ENCRYPTION_KEY</code> 加密后存储；明文不会再次显示。</small></p><div class="row"><input id="keyName" maxlength="64" placeholder="例如：主账号"><input id="upstreamKey" type="password" placeholder="Gemini API Key"><button id="addKey">添加 Key</button></div><ul id="upstreamKeys"></ul>
 <h2>中转策略与模型</h2><div class="row"><label>策略 <select id="strategy"><option value="random">随机</option><option value="round_robin">轮询</option></select></label><button id="savePolicy">保存策略</button></div><p><small>每行一个允许中转的 Gemini 模型；留空表示不限制模型。</small></p><textarea id="allowedModels" placeholder="gemini-3.5-flash-lite"></textarea>
-<h2>客户端访问令牌</h2><p><small>用户将中转网址加 <code>/v1</code> 和该令牌填入 OpenAI 兼容客户端。新令牌只显示一次。</small></p><div class="row"><input id="tokenName" maxlength="64" placeholder="例如：Kelivo - 张三"><button id="createToken">创建令牌</button></div><p id="created" class="notice hidden"></p><ul id="tokens"></ul>
+<h2>客户端访问令牌</h2><p><small>用户选择 Gemini 原生客户端，使用中转网址的 Gemini 原生路径（例如 <code>/v1beta</code>）和该令牌。新令牌只显示一次。</small></p><div class="row"><input id="tokenName" maxlength="64" placeholder="例如：Kelivo - 张三"><button id="createToken">创建令牌</button></div><p id="created" class="notice hidden"></p><ul id="tokens"></ul>
 </section></main>
 <script>
 let adminToken = '';

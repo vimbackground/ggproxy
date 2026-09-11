@@ -1,55 +1,60 @@
 # Kelivo 用户使用教程
 
-这份教程只面向使用者。你只需要从管理员获得两项内容：
+这份教程面向收到管理员中转服务的普通用户。默认使用“后台中转”：你不需要拥有 Gemini API Key。
 
-- **中转网址**，例如 `https://proxy.example`
-- **用户令牌**，通常以 `ggp_` 开头
+开始前，请向管理员索取：
 
-不要向管理员索取 Gemini API Key，也不要把自己的用户令牌发给其他人。
+- 中转网址，例如 `https://proxy.example`
+- 用户令牌，例如 `ggp_...`
 
-## 设置步骤
+不要把用户令牌发给他人。它相当于你的访问凭证。
 
-1. 打开 Kelivo，进入 **设置 / Providers（供应商）**，点击添加供应商。
-2. 类型选择 **OpenAI** 或 **OpenAI 兼容**。
-3. 按下面填写：
+## 使用管理员提供的中转服务
+
+1. 在 Kelivo 打开 **设置 → Providers（供应商）**，选择添加供应商。
+2. 类型选择 **Gemini** 或 **Gemini 原生**。不要选择 OpenAI 或 Claude。
+3. 按下表填写并保存。
 
 | 字段 | 填写内容 |
 |---|---|
 | 名称 | 任意，例如 `我的 ggproxy` |
-| Base URL / API 主机 | 管理员给的中转网址加 `/v1`，例如 `https://proxy.example/v1` |
-| API Key | 管理员给的用户令牌（`ggp_...`） |
-| API 路径 | 保持默认 `/chat/completions`，不要清空 |
+| Base URL / API 主机 | 管理员给的中转网址加 `/v1beta`，例如 `https://proxy.example/v1beta` |
+| API Key | 管理员给的 `ggp_...` 用户令牌 |
+| API Path | 保持 Gemini 供应商的默认值；不要改成 `/chat/completions` |
 
-4. 保存后点击 **获取模型**，在返回的列表中启用一个模型。
-5. 回到对话页，选中刚启用的模型，发送一句测试消息。
+4. 点击 **Fetch models / 获取模型**。
+5. 勾选要使用的模型，回到对话页选择该模型后发送测试消息。
 
-Kelivo 的官方指南也建议 OpenAI 兼容服务的 Base URL 通常以 `/v1` 结尾，填完 Key 后使用“获取模型”；默认请求路径应保持 `/chat/completions`。[查看 Kelivo 使用手册](https://kelivo.psycheas.top/guide)
+这套配置发送的地址与 Gemini 官方地址一致。例如模型列表请求会访问 `https://proxy.example/v1beta/models`。`ggp_...` 令牌只能放在 Gemini 配置中，不能用于 `/openai`、`/gemini` 或 `/claude` 地址。
 
-## 使用自己的 Gemini Key（BYOK）
+Kelivo 的通用操作可参阅 [Kelivo 使用手册](https://kelivo.psycheas.top/guide)。
 
-这是与本站中转令牌明确分开的高级模式。管理员允许你使用时，类型仍选 OpenAI / OpenAI 兼容，但改为：
+## 使用自己的 Gemini API Key（BYOK）
 
-| 字段 | 填写内容 |
-|---|---|
-| Base URL / API 主机 | 中转网址加 `/byok/v1`，例如 `https://proxy.example/byok/v1` |
-| API Key | 你自己的 Gemini API Key |
+如果你不使用管理员的 Key 池，而是使用自己的 Gemini API Key，请新建一个单独的供应商配置。选择的供应商类型、Base URL 和 API Key 必须对应：
 
-BYOK 不使用管理员后台的 Key 池，也不占用后台客户端令牌。不要把本站客户端令牌填进 BYOK 配置。
+| 供应商类型 | Base URL / API 主机 | API Key |
+|---|---|---|
+| OpenAI | `https://proxy.example/openai/v1` | 你自己的 Gemini API Key |
+| Gemini | `https://proxy.example/gemini/v1beta` | 你自己的 Gemini API Key |
+| Claude | `https://proxy.example/claude/v1` | 你自己的 Gemini API Key |
+
+BYOK 不使用管理员后台的服务端 Key、轮询策略或模型限制。不要把 `ggp_...` 用户令牌填进这些配置。
 
 ## 常见问题
 
 ### 获取模型或聊天时提示 401
 
-确认 API Key 填的是管理员给的用户令牌，不是 Gemini Key；检查是否多复制了空格。若此前能用而现在不行，令牌可能已被撤销，请联系管理员重新创建。
+确认你选择的是 Gemini 供应商，且 API Key 是管理员提供的 `ggp_...` 令牌。删除 Key 前后的空格后重新保存。若之前可用、现在不可用，可能是管理员撤销了令牌，需要联系管理员重新创建。
 
 ### 提示 404
 
-Base URL 必须是管理员给的域名加 `/v1`，不要填成 Gemini、OpenAI 或 Anthropic 官方域名；“API 路径”保持默认即可。
+使用 `ggp_...` 时，Base URL 应是 `https://你的域名/v1beta`，不要添加 `/openai`、`/gemini` 或 `/claude`。使用自己的 Key 时，必须使用上表中与供应商类型一致的地址。
 
 ### 没有可选模型
 
-先重新点击“获取模型”。如果仍为空，请把错误提示截图发给管理员；管理员需要检查中转服务的模型设置。
+先再次点击“获取模型”。若仍然为空，将错误提示截图发给管理员；管理员需要检查服务端是否有已启用的 Gemini API Key，以及后台模型限制是否允许该模型。
 
-### 可以把配置复制到另一台设备吗？
+### 可以复制到另一台自己的设备吗？
 
-可以使用 Kelivo 的供应商配置导出/二维码功能，但二维码里含有用户令牌，只应在你自己的设备之间传输。丢失设备或怀疑泄露时，立即联系管理员撤销该令牌。
+可以用 Kelivo 的供应商配置导出或二维码功能。但其中包含用户令牌，只能在自己的设备之间传输。设备丢失或怀疑令牌泄露时，立即请管理员撤销该令牌。

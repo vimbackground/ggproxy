@@ -26,19 +26,23 @@ export async function enforceGatewayAuth(request, config, env) {
   const proxyHeader = request.headers.get('x-proxy-token');
   const authorization = request.headers.get('authorization') || '';
   const bearerToken = /^Bearer\s+(.+)$/i.exec(authorization)?.[1]?.trim() || '';
+  const geminiHeader = request.headers.get('x-goog-api-key') || '';
+  const queryKey = new URL(request.url).searchParams.get('key') || '';
   const hasAdminStore = Boolean(env?.GGPROXY_ADMIN_KV || (config.adminStoreUrl && config.adminStoreToken));
-  if (!config.proxyTokens.length && !hasAdminStore) return { usedAuthorization: false, useManagedPool: false };
-  for (const actual of [proxyHeader, bearerToken]) {
+  if (!config.proxyTokens.length && !hasAdminStore) return { credentialSource: '', useManagedPool: false, isManagedToken: false };
+  for (const [actual, credentialSource] of [
+    [proxyHeader, 'proxy_header'], [bearerToken, 'authorization'], [geminiHeader, 'gemini_header'], [queryKey, 'query'],
+  ]) {
     if (actual && config.proxyTokens.some((token) => constantTimeEqual(actual, token))) {
-      const usedAuthorization = !proxyHeader && actual === bearerToken;
-      return { usedAuthorization, useManagedPool: usedAuthorization };
+      return { credentialSource, useManagedPool: credentialSource !== 'proxy_header', isManagedToken: false };
     }
   }
   const { isManagedTokenValid } = await import('./admin.js');
-  for (const actual of [proxyHeader, bearerToken]) {
+  for (const [actual, credentialSource] of [
+    [proxyHeader, 'proxy_header'], [bearerToken, 'authorization'], [geminiHeader, 'gemini_header'], [queryKey, 'query'],
+  ]) {
     if (await isManagedTokenValid(actual, env, config)) {
-      const usedAuthorization = !proxyHeader && actual === bearerToken;
-      return { usedAuthorization, useManagedPool: usedAuthorization };
+      return { credentialSource, useManagedPool: credentialSource !== 'proxy_header', isManagedToken: true };
     }
   }
   throw new HttpError('Invalid proxy credentials', 401, 'invalid_proxy_token');

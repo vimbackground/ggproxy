@@ -23,6 +23,9 @@ describe('route identification', () => {
     assert.deepEqual(route('/v1/batches/batch_123', { authorization: 'Bearer key' }), {
       protocol: 'openai', endpoint: 'passthrough', path: '/v1/batches/batch_123',
     });
+    assert.deepEqual(route('/claude/v1/messages', { 'x-api-key': 'key' }), {
+      protocol: 'anthropic', endpoint: 'messages', authMode: 'byok',
+    });
   });
 
   it('resolves the /v1/models collision using credentials', () => {
@@ -90,17 +93,21 @@ describe('gateway security', () => {
     let upstreamKey;
     globalThis.fetch = async (_url, init) => {
       upstreamKey = new Headers(init.headers).get('x-goog-api-key');
-      return new Response('{"models":[]}');
+      return new Response('{}');
     };
-    const allowed = await handleRequest(request('/v1/models', { authorization: `Bearer ${createdBody.token}` }), env);
+    const allowed = await handleRequest(request('/v1beta/models', { 'x-goog-api-key': createdBody.token }), env);
     assert.equal(allowed.status, 200);
+    assert.equal(upstreamKey, 'server-key');
+
+    const queryAllowed = await handleRequest(request(`/v1beta/models?key=${createdBody.token}`), env);
+    assert.equal(queryAllowed.status, 200);
     assert.equal(upstreamKey, 'server-key');
 
     const revoked = await handleRequest(request(`/admin/api/tokens/${createdBody.record.id}`, {
       'x-admin-token': 'admin-secret',
     }, { method: 'DELETE' }), env);
     assert.equal(revoked.status, 204);
-    const denied = await handleRequest(request('/v1/models', { authorization: `Bearer ${createdBody.token}` }), env);
+    const denied = await handleRequest(request('/v1beta/models', { 'x-goog-api-key': createdBody.token }), env);
     assert.equal(denied.status, 401);
   });
 
@@ -130,20 +137,26 @@ describe('gateway security', () => {
       return geminiCompletion('ok');
     };
     for (let count = 0; count < 2; count += 1) {
-      const response = await handleRequest(jsonRequest('/v1/chat/completions', {
-        model: 'gemini-3.5-flash-lite', messages: [{ role: 'user', content: 'hello' }],
-      }, { authorization: `Bearer ${token}` }), env);
+      const response = await handleRequest(jsonRequest('/v1beta/models/gemini-3.5-flash-lite:generateContent', {
+        contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+      }, { 'x-goog-api-key': token }), env);
       assert.equal(response.status, 200);
     }
     assert.deepEqual(keys, ['gemini-key-primary', 'gemini-key-secondary']);
 
-    const disabled = await handleRequest(jsonRequest('/v1/chat/completions', {
-      model: 'gemini-not-enabled', messages: [{ role: 'user', content: 'hello' }],
-    }, { authorization: `Bearer ${token}` }), env);
+    const disabled = await handleRequest(jsonRequest('/v1beta/models/gemini-not-enabled:generateContent', {
+      contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+    }, { 'x-goog-api-key': token }), env);
     assert.equal(disabled.status, 403);
 
-    const byok = await handleRequest(request('/byok/v1beta/models', { 'x-goog-api-key': 'my-own-gemini-key' }), env);
+    const byok = await handleRequest(request('/gemini/v1beta/models', { 'x-goog-api-key': 'my-own-gemini-key' }), env);
     assert.equal(byok.status, 200);
+    assert.equal(keys.at(-1), 'my-own-gemini-key');
+
+    const openaiByok = await handleRequest(jsonRequest('/openai/v1/chat/completions', {
+      model: 'gemini-not-enabled', messages: [{ role: 'user', content: 'hello' }],
+    }, { authorization: 'Bearer my-own-gemini-key' }), env);
+    assert.equal(openaiByok.status, 200);
     assert.equal(keys.at(-1), 'my-own-gemini-key');
   });
 });
