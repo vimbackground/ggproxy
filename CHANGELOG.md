@@ -6,7 +6,10 @@
 
 ## [未发布]
 
-暂无。
+### 变更
+
+- 将 Cloudflare Worker 脚本名统一为 `ggproxy`，与仓库和服务标识一致。
+- Cloudflare、Vercel、Deno 与 Netlify 文档改为连接当前 GitHub 仓库，移除会复制或新建仓库的部署按钮流程。
 
 ## [2.0.0] - 2026-09-11
 
